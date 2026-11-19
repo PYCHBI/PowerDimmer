@@ -98,6 +98,29 @@ namespace PowerDimmer
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool GetWindowRect(IntPtr hwnd, out RECT lpRect);
 
+        /// <summary>
+        /// Screen rectangle of the pixels the window actually paints.
+        ///
+        /// GetWindowRect on Windows 10/11 also reports the invisible resize border
+        /// (10 physical pixels at 175% scaling, typically on the left, right and
+        /// bottom). Anything positioned with it and then placed *under* the window
+        /// shows that margin as a dark rectangular frame around the visible - and
+        /// possibly rounded - window outline. DWM knows the real edge, so prefer it
+        /// and only fall back to GetWindowRect when it refuses (e.g. some UWP hosts
+        /// or windows that are still being created).
+        /// </summary>
+        public static bool GetVisibleWindowRect(IntPtr hwnd, out RECT rect)
+        {
+            if (DwmGetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE.DWMWA_EXTENDED_FRAME_BOUNDS,
+                    out rect, Marshal.SizeOf(typeof(RECT))) == 0 &&
+                rect.Right > rect.Left && rect.Bottom > rect.Top)
+            {
+                return true;
+            }
+
+            return GetWindowRect(hwnd, out rect);
+        }
+
         public const int SW_SHOWMAXIMIZED = 3;
         public const int SW_SHOWNORMAL = 1;
 

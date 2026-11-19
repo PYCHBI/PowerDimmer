@@ -747,7 +747,11 @@ namespace PowerDimmer
         private static bool TryGetBounds(IntPtr hwnd, out System.Drawing.Rectangle bounds)
         {
             bounds = default;
-            if (!Win32.GetWindowRect(hwnd, out var rect))
+
+            // Visible pixels only. GetWindowRect would add the invisible resize
+            // border, and the fade overlay - which sits *under* the window while it
+            // darkens it - would then leak that margin as a dark frame around it.
+            if (!Win32.GetVisibleWindowRect(hwnd, out var rect))
             {
                 return false;
             }
