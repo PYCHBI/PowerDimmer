@@ -121,6 +121,45 @@ namespace PowerDimmer
             return GetWindowRect(hwnd, out rect);
         }
 
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsZoomed(IntPtr hWnd);
+
+        /// <summary>How DWM rounds a window's corners (Windows 11 attribute 33).</summary>
+        public enum DWM_WINDOW_CORNER_PREFERENCE
+        {
+            DWMWCP_DEFAULT = 0,     // DWM decides - rounded for a normal top-level window
+            DWMWCP_DONOTROUND = 1,
+            DWMWCP_ROUND = 2,
+            DWMWCP_ROUNDSMALL = 3
+        }
+
+        // 33 = DWMWA_WINDOW_CORNER_PREFERENCE. (34 is BORDER_COLOR, 37 is the visible
+        // frame border thickness.) Passing the wrong one fails with E_INVALIDARG on every
+        // window, which silently disables the rounding.
+        private const uint DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+
+        /// <summary>
+        /// Reads the corner preference. Only Windows 11 answers; on Windows 10 the
+        /// attribute does not exist, which means square corners anyway.
+        /// </summary>
+        public static bool TryGetCornerPreference(IntPtr hwnd, out DWM_WINDOW_CORNER_PREFERENCE preference)
+        {
+            preference = DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_DONOTROUND;
+
+            if (DwmGetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                    out int value, sizeof(int)) != 0)
+            {
+                return false;
+            }
+
+            preference = (DWM_WINDOW_CORNER_PREFERENCE)value;
+            return true;
+        }
+
+        [DllImport("dwmapi.dll", SetLastError = true)]
+        internal static extern int DwmGetWindowAttribute(IntPtr hwnd, uint dwAttribute, out int pvAttribute, int cbAttribute);
+
         public const int SW_SHOWMAXIMIZED = 3;
         public const int SW_SHOWNORMAL = 1;
 

@@ -47,6 +47,16 @@ namespace PowerDimmer
         public System.Drawing.Rectangle ScreenBounds => _screenBounds;
 
         /// <summary>
+        /// Radius, in DIPs, to clip this mask to; 0 for a plain rectangle. Windows 11
+        /// windows are rounded, so the four corner wedges inside their bounding box are
+        /// not painted by the window - the full-screen mask shows through there and is
+        /// already dimmed. A rectangular overlay laid on top of that spot dims it a second
+        /// time, which reads as a small darker square at each corner until it closes.
+        /// Clipping the overlay to the same radius keeps every pixel dimmed exactly once.
+        /// </summary>
+        public double CornerRadiusDip { get; set; }
+
+        /// <summary>
         /// Puts a soft hole in the mask centred on the given screen position (physical
         /// pixels). The radius is in DIPs so it keeps a constant visual size on every
         /// monitor, whatever the scaling is.
@@ -154,6 +164,40 @@ namespace PowerDimmer
                 Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
 
             base.OnSourceInitialized(e);
+        }
+
+        protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
+        {
+            base.OnRenderSizeChanged(sizeInfo);
+            ApplyCornerClip();
+        }
+
+        /// <summary>
+        /// Rounds the painted surface off with a clipping geometry.
+        ///
+        /// Done in WPF rather than with SetWindowRgn: a window region is binary, so the
+        /// arc lands on whole pixels and either bites a pixel out of the window corner or
+        /// leaves one covered - a one-pixel rim that lightens by ~16 levels when the fade
+        /// hands over. A WPF clip is anti-aliased and measures in DIPs, which is the unit
+        /// the radius is quoted in.
+        /// </summary>
+        private void ApplyCornerClip()
+        {
+            if (CornerRadiusDip <= 0)
+            {
+                _surface.Clip = null;
+                return;
+            }
+
+            var width = ActualWidth;
+            var height = ActualHeight;
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
+            _surface.Clip = new RectangleGeometry(
+                new Rect(0, 0, width, height), CornerRadiusDip, CornerRadiusDip);
         }
     }
 }

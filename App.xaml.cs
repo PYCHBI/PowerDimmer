@@ -689,7 +689,10 @@ namespace PowerDimmer
             // actually bright right now.
             CancelFade();
 
-            var overlay = new DimWindow(settings, bounds, maskBrush);
+            var overlay = new DimWindow(settings, bounds, maskBrush)
+            {
+                CornerRadiusDip = GetWindowCornerRadiusDip(leaving)
+            };
             overlay.SetSurfaceOpacity(0);
             overlay.Show();
 
@@ -743,6 +746,30 @@ namespace PowerDimmer
 
         private static bool CanFadeFrom(IntPtr hwnd) =>
             Win32.IsWindow(hwnd) && Win32.IsWindowVisible(hwnd) && !Win32.IsIconic(hwnd);
+
+        /// <summary>
+        /// Corner radius, in DIPs, that the fade overlay has to be clipped to so it covers
+        /// no more than the window itself. Returns 0 for square corners.
+        /// </summary>
+        private static double GetWindowCornerRadiusDip(IntPtr hwnd)
+        {
+            // A maximised window sits flush with the screen edges and DWM leaves its
+            // corners square; clipping there would bite four notches out of it.
+            if (Win32.IsZoomed(hwnd))
+            {
+                return 0;
+            }
+
+            if (!Win32.TryGetCornerPreference(hwnd, out var preference) ||
+                preference == Win32.DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_DONOTROUND)
+            {
+                return 0;
+            }
+
+            // Measured 19 px at 175% scaling, i.e. ~10 DIP, which is what Windows 11 uses
+            // for a normal top-level window. The "small" variant is the flyout radius.
+            return preference == Win32.DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUNDSMALL ? 4.0 : 10.0;
+        }
 
         private static bool TryGetBounds(IntPtr hwnd, out System.Drawing.Rectangle bounds)
         {

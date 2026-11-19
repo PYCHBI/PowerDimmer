@@ -15,9 +15,9 @@
   <!-- Single source of truth for the version shown in the About dialog, the tray menu
        and the exe's "Properties -> Details" page. Bump this when releasing. -->
   <PropertyGroup>
-    <Version>1.4.1</Version>
-    <AssemblyVersion>1.4.1.0</AssemblyVersion>
-    <FileVersion>1.4.1.0</FileVersion>
+    <Version>1.4.2</Version>
+    <AssemblyVersion>1.4.2.0</AssemblyVersion>
+    <FileVersion>1.4.2.0</FileVersion>
     <Product>PowerDimmer</Product>
     <Company>PYCHBI</Company>
     <Description>Screen mask for recording and demos - dim everything except the focused window.</Description>
