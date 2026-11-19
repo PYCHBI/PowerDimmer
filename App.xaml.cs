@@ -694,16 +694,21 @@ namespace PowerDimmer
                     return; // superseded by a newer switch
                 }
 
-                CancelFade();
                 if (!settings.DimmingEnabled || masksHidden)
                 {
+                    CancelFade();
                     return;
                 }
 
-                // The target may have been closed while we were fading.
+                // Order matters. The mask is still sitting *under* the window we are
+                // leaving, so the overlay is the only thing keeping it dark. Dropping the
+                // overlay first exposed that window for one composed frame - that was the
+                // flash. Move the mask onto the target first, then take the overlay away
+                // a frame later, by which time both layers are identical anyway.
                 var target = Win32.IsWindow(pendingMaskAnchor) ? pendingMaskAnchor : curFgHwnd;
                 PlaceMasksBelow(target);
                 Trace($"fade: done -> {Describe(target)}");
+                DiscardOverlayAfterFrame(overlay);
             });
 
             Trace($"fade: {fadeMs}ms from {Describe(leaving)} to {Describe(anchor)}");
@@ -734,23 +739,60 @@ namespace PowerDimmer
         /// <summary>Closes the fade overlay, if one is running, and voids its callback.</summary>
         private void CancelFade()
         {
+            var window = fadeWindow;
+            if (window != null)
+            {
+                CloseOverlay(window);
+                return;
+            }
+
             fadeGeneration++;
             fadeTargetWindow = IntPtr.Zero;
+        }
 
-            var window = fadeWindow;
-            fadeWindow = null;
-            if (window == null)
+        /// <summary>
+        /// Closes <paramref name="overlay"/> - but only if it is still the current one, so
+        /// a delayed cleanup can never take down a fade that started in the meantime.
+        /// </summary>
+        private void CloseOverlay(DimWindow overlay)
+        {
+            if (!ReferenceEquals(fadeWindow, overlay))
             {
                 return;
             }
 
+            fadeWindow = null;
+            fadeTargetWindow = IntPtr.Zero;
+            fadeGeneration++;
+
             try
             {
-                window.Close();
+                overlay.Close();
             }
             catch
             {
             }
+        }
+
+        /// <summary>
+        /// Drops the overlay a few frames after the mask has been moved. Closing it in the
+        /// same beat as the SetWindowPos lets DWM compose one frame in which neither layer
+        /// covers the window - visible as a single bright flicker.
+        /// </summary>
+        private void DiscardOverlayAfterFrame(DimWindow overlay)
+        {
+            var timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(60)
+            };
+
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                CloseOverlay(overlay);
+            };
+
+            timer.Start();
         }
 
         private void ScheduleMaskMove(IntPtr anchor, int delayMs)
