@@ -35,13 +35,51 @@ jobs:
           Write-Host "version = $v"
 
       - name: Build portable + lightweight zips
+        shell: pwsh
         run: |
+          # The portable package is meant to be unzipped straight over an existing
+          # install, so:
+          #  * archive entries must sit at the zip root (no "portable/" prefix), and
+          #  * nothing user-generated (settings.json, crash.log) may be inside, or an
+          #    "upgrade" would silently wipe the user's config.
+          function Assert-Clean([string]$dir) {
+            foreach ($bad in @("settings.json", "settings.json.new", "crash.log")) {
+              if (Test-Path (Join-Path $dir $bad)) {
+                throw "Refusing to package: $bad found in $dir"
+              }
+            }
+            Write-Host "--- contents of $dir ---"
+            Get-ChildItem $dir | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+          }
+
           dotnet publish -c Release -r win-x64 --self-contained true -o portable
-          7z a -tzip "PowerDimmer-portable.zip" "./portable/*"
-          rm -r "portable"
+          Assert-Clean portable
+          Compress-Archive -Path "portable/*" -DestinationPath "PowerDimmer-portable.zip" -Force
+          Remove-Item -Recurse -Force portable
+
           dotnet publish -c Release -o lightweight
-          7z a -tzip "PowerDimmer-requires-dotnet8.zip" "./lightweight/*"
-          rm -r "lightweight"
+          Assert-Clean lightweight
+          Compress-Archive -Path "lightweight/*" -DestinationPath "PowerDimmer-requires-dotnet8.zip" -Force
+          Remove-Item -Recurse -Force lightweight
+
+          Write-Host "--- zip listings ---"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          foreach ($zip in @("PowerDimmer-portable.zip", "PowerDimmer-requires-dotnet8.zip")) {
+            $a = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+            $names = $a.Entries | ForEach-Object { $_.FullName }
+            $a.Dispose()
+
+            Write-Host "$zip :"
+            $names | ForEach-Object { Write-Host ("   " + $_) }
+
+            # Unzipping over an existing install only works if the files sit at the
+            # archive root. A "portable/" prefix would bury them in a subfolder.
+            $nested = $names | Where-Object { $_ -match "/" }
+            if ($nested) { throw "$zip contains a folder prefix: $($nested -join ', ')" }
+            if ($names -notcontains "PowerDimmer.exe") { throw "$zip has no PowerDimmer.exe at its root" }
+            if ($names -contains "settings.json") { throw "$zip contains settings.json - an upgrade would wipe user config" }
+            if ($names -contains "crash.log") { throw "$zip contains crash.log" }
+          }
 
       - uses: softprops/action-gh-release@v2
         with:
