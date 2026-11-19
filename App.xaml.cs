@@ -766,6 +766,19 @@ namespace PowerDimmer
                 return 0;
             }
 
+            // Same reason for a window that fills a whole monitor without being maximised
+            // (video players, games): DWM does not round those, so clipping would leave
+            // four little holes showing the dimmed desktop through a bright picture.
+            if (TryGetBounds(hwnd, out var bounds) &&
+                System.Windows.Forms.Screen.AllScreens.Any(screen =>
+                    Math.Abs(bounds.Left - screen.Bounds.Left) <= 2 &&
+                    Math.Abs(bounds.Top - screen.Bounds.Top) <= 2 &&
+                    Math.Abs(bounds.Right - screen.Bounds.Right) <= 2 &&
+                    Math.Abs(bounds.Bottom - screen.Bounds.Bottom) <= 2))
+            {
+                return 0;
+            }
+
             // Measured 19 px at 175% scaling, i.e. ~10 DIP, which is what Windows 11 uses
             // for a normal top-level window. The "small" variant is the flyout radius.
             return preference == Win32.DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUNDSMALL ? 4.0 : 10.0;
