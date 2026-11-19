@@ -52,7 +52,6 @@ jobs:
             **PowerDimmer-requires-dotnet8.zip** — Smaller download, requires [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) installed.
 
             Version is shown in the About window (tray menu → 设置 → 关于 PowerDimmer) and in the exe's Properties → Details page.
-          prerelease: true
           files: |
             PowerDimmer-portable.zip
             PowerDimmer-requires-dotnet8.zip
