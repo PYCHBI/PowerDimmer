@@ -1,4 +1,5 @@
 name: Build and Release
+
 on:
   workflow_dispatch:
   push:
@@ -6,33 +7,51 @@ on:
       - main
     paths-ignore:
       - "**.md"
+
+# The default token is read-only on new repositories, and publishing a release
+# needs write access to repository contents. Without this the old
+# "update-tag" step failed with 403 and the release step was skipped.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
-      - run: |
+
+      - name: Read version from csproj
+        id: ver
+        shell: pwsh
+        run: |
+          [xml]$proj = Get-Content PowerDimmer.csproj
+          $v = ($proj.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
+          if (-not $v) { $v = "0.0.0" }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "version = $v"
+
+      - name: Build portable + lightweight zips
+        run: |
           dotnet publish -c Release -r win-x64 --self-contained true -o portable
           7z a -tzip "PowerDimmer-portable.zip" "./portable/*"
           rm -r "portable"
           dotnet publish -c Release -o lightweight
           7z a -tzip "PowerDimmer-requires-dotnet8.zip" "./lightweight/*"
           rm -r "lightweight"
-      - uses: richardsimko/update-tag@v1
-        with:
-          tag_name: latest
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Latest Build
+          name: Latest Build (v${{ steps.ver.outputs.version }})
           body: |
             **PowerDimmer-portable.zip** — Self-contained, no .NET required. Just extract and run.
             **PowerDimmer-requires-dotnet8.zip** — Smaller download, requires [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) installed.
+
+            Version is shown in the About window (tray menu → 设置 → 关于 PowerDimmer) and in the exe's Properties → Details page.
           prerelease: true
           files: |
             PowerDimmer-portable.zip

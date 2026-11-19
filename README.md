@@ -21,7 +21,14 @@ This is a fork of [shayne/PowerDimmer](https://github.com/shayne/PowerDimmer). T
 - **程序例外名单**：按进程名 / exe 全路径 / 窗口标题子串匹配，支持 `off` / `exclude` / `only` 三种模式，名单为空时按 `off` 处理。
 - **重做亮度滑块**：菜单里的滑条改成自绘控件，修复 175% 缩放下文案被截断、圆点底部被裁切、轨道不到菜单右边缘的问题。
 - **默认不压暗任务栏**（原版默认压暗），需要时在菜单里勾选。
+- **版本号与详情页**：版本号唯一来源是 `PowerDimmer.csproj` 里的 `<Version>`，会同时出现在三处 —— 托盘菜单 `设置 → 关于 PowerDimmer`（显示版本、构建时间、运行环境、配置文件位置、项目地址，可一键复制版本信息）、exe 的「属性 → 详细信息」页、以及发布包的名称里。
 - 异常写 `crash.log`，方便定位。
+
+## 下载
+
+到 [Releases](https://github.com/PYCHBI/PowerDimmer/releases) 下 `PowerDimmer-portable.zip`（自包含，不需要装 .NET）。
+
+每次 push 到 `main` 会自动构建并发到 `latest` 预发布；版本号取自 csproj，改版本只改这一处。
 
 ### 便携版构建
 

@@ -72,6 +72,23 @@ namespace PowerDimmer
                                      "Could not identify the current window - edit the rules manually."),
 
             ["Menu.Exit"] = ("退出", "E&xit"),
+            ["Menu.About"] = ("关于 PowerDimmer…", "About PowerDimmer..."),
+
+            // ---- about / details window ----
+            ["About.Title"] = ("关于 PowerDimmer", "About PowerDimmer"),
+            ["About.Subtitle"] = ("录屏 / 演示用的屏幕遮罩：只留下当前窗口，其余压暗",
+                                  "A screen mask for recording and demos: keep one window, dim the rest"),
+            ["About.Version"] = ("版本", "Version"),
+            ["About.Built"] = ("构建于", "Built"),
+            ["About.Runtime"] = ("运行环境", "Runtime"),
+            ["About.Config"] = ("配置文件", "Config file"),
+            ["About.Project"] = ("项目主页", "Project page"),
+            ["About.Upstream"] = ("原项目", "Upstream"),
+            ["About.License"] = ("许可", "License"),
+            ["About.Copy"] = ("复制版本信息", "Copy version info"),
+            ["About.Copied"] = ("已复制", "Copied"),
+            ["About.OpenProject"] = ("打开项目主页", "Open project page"),
+            ["About.Close"] = ("关闭", "Close"),
 
             // ---- tray tooltip ----
             ["Tray.Tooltip"] = ("PowerDimmer - 双击暂停/恢复", "PowerDimmer - double click to pause"),

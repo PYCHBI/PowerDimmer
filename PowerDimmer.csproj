@@ -9,6 +9,18 @@
     <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
+  <!-- Single source of truth for the version shown in the About dialog, the tray menu
+       and the exe's "Properties -> Details" page. Bump this when releasing. -->
+  <PropertyGroup>
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
+    <Product>PowerDimmer</Product>
+    <Company>PYCHBI</Company>
+    <Description>Screen mask for recording and demos - dim everything except the focused window.</Description>
+    <Copyright>MIT License - fork of shayne/PowerDimmer</Copyright>
+  </PropertyGroup>
+
   <ItemGroup>
     <Compile Remove="Hook.cs" />
   </ItemGroup>

@@ -229,6 +229,11 @@ namespace PowerDimmer
                 sub.AddButton(option => option
                     .SetText(Loc.T("Menu.OpenConfigFolder"))
                     .AddHandler(() => StartupRegistration.OpenConfigFolder((settings as Settings)?.FilePath)));
+
+                sub.AddSeparator();
+                sub.AddButton(option => option
+                    .SetText(Loc.T("Menu.About"))
+                    .AddHandler(ShowAbout));
             });
 
             builder
@@ -362,6 +367,17 @@ namespace PowerDimmer
                 }
 
                 RebuildMenu();
+            }));
+        }
+
+        private void ShowAbout()
+        {
+            // Same reason as EditRules: a modal window opened straight from a menu click
+            // keeps the menu's message loop nested underneath it.
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+            {
+                var dialog = new AboutDialog((settings as Settings)?.FilePath);
+                dialog.ShowDialog();
             }));
         }
 

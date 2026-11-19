@@ -188,6 +188,12 @@ namespace PowerDimmer
                 };
                 timer.Start();
             }
+            // Debug helper: PowerDimmer.exe --about  opens the About/version window directly.
+            if (e.Args.Any(a => a.Equals("--about", StringComparison.OrdinalIgnoreCase)))
+            {
+                new AboutDialog((settings as Settings)?.FilePath).ShowDialog();
+            }
+
             Exit += (e, s) =>
             {
                 iconController.NotifyIcon.Visible = false;
