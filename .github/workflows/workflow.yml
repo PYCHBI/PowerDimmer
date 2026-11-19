@@ -113,3 +113,30 @@ jobs:
             ${{ steps.pack.outputs.light_zip }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # "latest" is a single rolling release, so assets from previous runs stay behind.
+      # They pile up (and people download the stale one), so prune everything that is
+      # not part of this build.
+      - name: Prune stale assets from the rolling release
+        if: success()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: "${{ steps.pack.outputs.portable_zip }},${{ steps.pack.outputs.light_zip }}"
+        run: |
+          $keep = $env:KEEP.Split(",")
+          $headers = @{
+            Authorization          = "Bearer $env:GH_TOKEN"
+            Accept                 = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          $release = Invoke-RestMethod -Headers $headers `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/latest"
+
+          foreach ($asset in $release.assets) {
+            if ($keep -notcontains $asset.name) {
+              Write-Host "removing stale asset: $($asset.name)"
+              Invoke-RestMethod -Method Delete -Headers $headers -Uri $asset.url | Out-Null
+            }
+          }
+          Write-Host "assets now: $((Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/latest").assets.name -join ', ')"
