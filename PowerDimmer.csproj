@@ -7,6 +7,9 @@
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- Only ship the framework's Chinese + English resource folders: a self-contained
+         publish otherwise drags in cs/, de/, ru/, zh-Hant/ ... (~30 MB of unused text). -->
+    <SatelliteResourceLanguages>en;zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <!-- Single source of truth for the version shown in the About dialog, the tray menu

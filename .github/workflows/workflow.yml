@@ -72,10 +72,11 @@ jobs:
             Write-Host "$zip :"
             $names | ForEach-Object { Write-Host ("   " + $_) }
 
-            # Unzipping over an existing install only works if the files sit at the
-            # archive root. A "portable/" prefix would bury them in a subfolder.
-            $nested = $names | Where-Object { $_ -match "/" }
-            if ($nested) { throw "$zip contains a folder prefix: $($nested -join ', ')" }
+            # Unzipping over an existing install only works if the program files sit at
+            # the archive root. A "portable/" wrapper folder would bury them one level
+            # deeper. (Subfolders like zh-Hans/ are legitimate .NET satellite resources.)
+            $wrapped = $names | Where-Object { $_ -like "portable/*" -or $_ -like "lightweight/*" }
+            if ($wrapped) { throw "$zip is wrapped in a folder: $($wrapped[0])" }
             if ($names -notcontains "PowerDimmer.exe") { throw "$zip has no PowerDimmer.exe at its root" }
             if ($names -contains "settings.json") { throw "$zip contains settings.json - an upgrade would wipe user config" }
             if ($names -contains "crash.log") { throw "$zip contains crash.log" }
