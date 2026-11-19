@@ -72,6 +72,15 @@ namespace PowerDimmer
         private string filterMode = WindowFilter.Off;
         private List<string> filterKeywords = new();
 
+        // How long the window we just left stays un-dimmed after the focus moves.
+        // 0 = move the mask immediately (old behaviour). See App.UpdateDimming.
+        private int switchDelayMs = 300;
+
+        // Cursor spotlight: punches a soft hole in the mask around the mouse pointer so
+        // the area under it stays readable. Radius is in DIPs (scales with the monitor).
+        private bool spotlightEnabled = false;
+        private double spotlightRadius = 140;
+
         public event PropertyChangedEventHandler? PropertyChanged;
 
         public Settings()
@@ -157,6 +166,31 @@ namespace PowerDimmer
         }
 
         /// <summary>
+        /// Grace period after a focus change, in milliseconds: the mask stays under the
+        /// previous window for this long, so both windows are readable during the
+        /// transition. 0 disables it.
+        /// </summary>
+        public int SwitchDelayMs
+        {
+            get => switchDelayMs;
+            set => Set(ref switchDelayMs, Math.Clamp(value, 0, 2000));
+        }
+
+        /// <summary>Keep the area around the mouse pointer un-dimmed.</summary>
+        public bool SpotlightEnabled
+        {
+            get => spotlightEnabled;
+            set => Set(ref spotlightEnabled, value);
+        }
+
+        /// <summary>Spotlight hole radius in DIPs (96 = one inch at 100% scaling).</summary>
+        public double SpotlightRadius
+        {
+            get => spotlightRadius;
+            set => Set(ref spotlightRadius, Math.Clamp(value, 20, 1200));
+        }
+
+        /// <summary>
         /// Case-insensitive substrings matched against process name, exe path and
         /// window title. Assigning a new list triggers a change notification, which is
         /// what makes the mask re-evaluate immediately.
@@ -218,6 +252,21 @@ namespace PowerDimmer
             MaskColor = dto.maskColor ?? maskColor;
             FilterMode = dto.filterMode ?? filterMode;
             FilterKeywords = dto.filterKeywords ?? filterKeywords;
+
+            if (dto.switchDelayMs != null)
+            {
+                SwitchDelayMs = dto.switchDelayMs.Value;
+            }
+
+            if (dto.spotlightEnabled != null)
+            {
+                SpotlightEnabled = dto.spotlightEnabled.Value;
+            }
+
+            if (dto.spotlightRadius != null)
+            {
+                SpotlightRadius = dto.spotlightRadius.Value;
+            }
 
             var level = dto.dimLevel ?? (dto.brightness != null ? 100 - dto.brightness.Value : (int?)null);
             if (level != null)
@@ -424,6 +473,9 @@ namespace PowerDimmer
             language = Loc.Normalize(dto.language ?? language);
             filterMode = WindowFilter.NormalizeMode(dto.filterMode ?? filterMode);
             filterKeywords = WindowFilter.NormalizeKeywords(dto.filterKeywords ?? filterKeywords);
+            switchDelayMs = Math.Clamp(dto.switchDelayMs ?? switchDelayMs, 0, 2000);
+            spotlightEnabled = dto.spotlightEnabled ?? spotlightEnabled;
+            spotlightRadius = Math.Clamp(dto.spotlightRadius ?? spotlightRadius, 20, 1200);
         }
 
         private SettingsDto ToDto() => new()
@@ -438,7 +490,10 @@ namespace PowerDimmer
             maskColor = maskColor,
             language = language,
             filterMode = filterMode,
-            filterKeywords = filterKeywords
+            filterKeywords = filterKeywords,
+            switchDelayMs = switchDelayMs,
+            spotlightEnabled = spotlightEnabled,
+            spotlightRadius = spotlightRadius
         };
 
         // Same key names the Config.Net version produced, so an existing settings.json
@@ -457,6 +512,9 @@ namespace PowerDimmer
             public string? language { get; set; }
             public string? filterMode { get; set; }
             public List<string>? filterKeywords { get; set; }
+            public int? switchDelayMs { get; set; }
+            public bool? spotlightEnabled { get; set; }
+            public double? spotlightRadius { get; set; }
         }
     }
 }

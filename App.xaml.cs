@@ -21,6 +21,14 @@ namespace PowerDimmer
         private bool masksHidden;
         private ISettings settings;
         private List<DimWindow> dimWindows { get; } = new();
+
+        // Stacking / spotlight bookkeeping.
+        private IntPtr lastDimTarget;                 // window dimmed around last time
+        private IntPtr pendingMaskAnchor;             // where the mask should end up
+        private System.Windows.Threading.DispatcherTimer? switchDelayTimer;
+        private System.Windows.Threading.DispatcherTimer? spotlightTimer;
+        private Win32.POINT lastCursor;
+        private bool hasCursorSample;
         private List<WindowShade> shadeWindows { get; } = new();
         private SortedSet<IntPtr> pinnedHandles { get; } = new();
 
@@ -91,6 +99,26 @@ namespace PowerDimmer
                     {
                         dimOff();
                         dimOn(curFgHwnd);
+                    }
+                }
+                else if (e.PropertyName == nameof(settings.SpotlightEnabled))
+                {
+                    if (settings.SpotlightEnabled && settings.DimmingEnabled)
+                    {
+                        StartSpotlightTracking();
+                    }
+                    else
+                    {
+                        StopSpotlightTracking(clear: true);
+                    }
+                }
+                else if (e.PropertyName == nameof(settings.SpotlightRadius))
+                {
+                    // Force a redraw: the position did not change, only the size did.
+                    hasCursorSample = false;
+                    if (settings.SpotlightEnabled && settings.DimmingEnabled)
+                    {
+                        UpdateSpotlight();
                     }
                 }
             };
@@ -294,6 +322,7 @@ namespace PowerDimmer
         private void dimOn(IntPtr fgHwnd)//creates a dim window on each screen
         {
             masksHidden = false;
+            lastDimTarget = IntPtr.Zero;
             var opacity = DimToOpacity(settings.DimLevel);
             var screens = settings.MultiMonitorDimming
                 ? System.Windows.Forms.Screen.AllScreens
@@ -310,16 +339,98 @@ namespace PowerDimmer
 
             // Honour the exception rules for whatever is in front right now.
             ApplyFocus(fgHwnd);
+
+            if (settings.SpotlightEnabled)
+            {
+                StartSpotlightTracking();
+            }
         }
 
         private void dimOff()
         {
             masksHidden = false;
+            lastDimTarget = IntPtr.Zero;
+            CancelMaskMove();
+            StopSpotlightTracking(clear: true);
             dimWindows.ForEach(w => w.Close());
             dimWindows.Clear();
             // the following maintains the proper
             // foreground window upon disabling
             Win32.SetForegroundWindow(curFgHwnd);
+        }
+
+        /// <summary>
+        /// Keeps a soft un-dimmed hole under the mouse pointer. Driven by a 33 ms timer
+        /// that only does real work when the cursor actually moved - a low-level mouse
+        /// hook would add no benefit here and can freeze the desktop if it stalls.
+        /// </summary>
+        private void StartSpotlightTracking()
+        {
+            if (spotlightTimer == null)
+            {
+                spotlightTimer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(33)
+                };
+                spotlightTimer.Tick += (_, _) => UpdateSpotlight();
+            }
+
+            hasCursorSample = false;
+            spotlightTimer.Start();
+            UpdateSpotlight();
+        }
+
+        private void StopSpotlightTracking(bool clear)
+        {
+            spotlightTimer?.Stop();
+            hasCursorSample = false;
+
+            if (!clear)
+            {
+                return;
+            }
+
+            foreach (var win in dimWindows)
+            {
+                win.ClearSpotlight();
+            }
+        }
+
+        private void UpdateSpotlight()
+        {
+            if (!settings.SpotlightEnabled || !settings.DimmingEnabled || masksHidden || dimWindows.Count == 0)
+            {
+                StopSpotlightTracking(clear: true);
+                return;
+            }
+
+            if (!Win32.GetCursorPos(out var cursor))
+            {
+                return;
+            }
+
+            if (hasCursorSample && cursor.X == lastCursor.X && cursor.Y == lastCursor.Y)
+            {
+                return;
+            }
+
+            lastCursor = cursor;
+            hasCursorSample = true;
+
+            foreach (var win in dimWindows)
+            {
+                var bounds = win.ScreenBounds;
+                if (cursor.X >= bounds.Left && cursor.X < bounds.Right &&
+                    cursor.Y >= bounds.Top && cursor.Y < bounds.Bottom)
+                {
+                    win.SetSpotlight(cursor.X, cursor.Y, settings.SpotlightRadius);
+                }
+                else
+                {
+                    // Only the monitor under the pointer gets a hole.
+                    win.ClearSpotlight();
+                }
+            }
         }
 
         // https://stackoverflow.com/questions/4372055/detect-active-window-changed-using-c-sharp-without-polling/10280800#10280800
@@ -393,6 +504,15 @@ namespace PowerDimmer
                     window.Show();
                 }
             }
+
+            if (hidden)
+            {
+                StopSpotlightTracking(clear: true);
+            }
+            else if (settings.SpotlightEnabled)
+            {
+                StartSpotlightTracking();
+            }
         }
 
         /// <summary>
@@ -422,6 +542,7 @@ namespace PowerDimmer
         {
             // Set the incoming/foreground handle as TOP...
             Win32.SetWindowPos(fgHwnd, Win32.HWND_TOP, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+
             IntPtr? firstPinned = null;
             foreach (var pinHandle in pinnedHandles)
             {
@@ -431,11 +552,32 @@ namespace PowerDimmer
                 // store the first pinned handle we didn't skip over
                 firstPinned ??= pinHandle;
             }
-            foreach (var dimWin in dimWindows)
+
+            var anchor = firstPinned ?? fgHwnd;
+            var previous = lastDimTarget;
+            var delay = Math.Clamp(settings.SwitchDelayMs, 0, 2000);
+
+            // Switch delay: right after the focus moves, park the mask under the window we
+            // just left instead of the new one. Everything above the mask stays readable,
+            // so both windows stay bright for a moment and then only the new one is left.
+            if (delay > 0 && firstPinned == null && previous != IntPtr.Zero && previous != fgHwnd
+                && Win32.IsWindow(previous) && !Win32.IsIconic(previous))
             {
-                // Finally place the dimmer window behind the first pinned or foreground
-                Win32.SetWindowPos(dimWin.Handle, firstPinned ?? fgHwnd, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+                // Do *not* re-stack here. The mask is already sitting under the window we
+                // just left; moving it now would end the grace period before it started,
+                // and anchoring it to `previous` can drag it anywhere in the z-order
+                // (a previously focused, now hidden window is not below the new one).
+                ScheduleMaskMove(anchor, delay);
+                Trace($"linger: fg={Describe(fgHwnd)} prev={Describe(previous)}");
             }
+            else
+            {
+                CancelMaskMove();
+                PlaceMasksBelow(anchor);
+                Trace($"now: fg={Describe(fgHwnd)} delay={delay} prev={Describe(previous)}");
+            }
+
+            lastDimTarget = fgHwnd;
 
             if(settings.DimTaskbar)
             {
@@ -445,6 +587,78 @@ namespace PowerDimmer
                     Win32.SetWindowPos(taskbarHwnd, Win32.HWND_BOTTOM, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
                 }
             }
+        }
+
+        /// <summary>Stacks every mask directly below <paramref name="anchor"/>.</summary>
+        private void PlaceMasksBelow(IntPtr anchor)
+        {
+            foreach (var dimWin in dimWindows)
+            {
+                Win32.SetWindowPos(dimWin.Handle, anchor, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+            }
+        }
+
+        private void ScheduleMaskMove(IntPtr anchor, int delayMs)
+        {
+            if (switchDelayTimer == null)
+            {
+                switchDelayTimer = new System.Windows.Threading.DispatcherTimer();
+                switchDelayTimer.Tick += (_, _) =>
+                {
+                    switchDelayTimer!.Stop();
+                    if (!settings.DimmingEnabled || masksHidden)
+                    {
+                        Trace("tick: skipped (disabled/hidden)");
+                        return;
+                    }
+
+                    // The window we were heading to may have been closed in the meantime.
+                    var anchor = Win32.IsWindow(pendingMaskAnchor) ? pendingMaskAnchor : curFgHwnd;
+                    PlaceMasksBelow(anchor);
+                    Trace($"tick: mask -> {Describe(anchor)}");
+                };
+            }
+
+            pendingMaskAnchor = anchor;
+            switchDelayTimer.Stop();
+            switchDelayTimer.Interval = TimeSpan.FromMilliseconds(delayMs);
+            switchDelayTimer.Start();
+            Trace($"schedule: {delayMs}ms -> {Describe(anchor)}");
+        }
+
+        private void CancelMaskMove() => switchDelayTimer?.Stop();
+
+        // Lightweight opt-in trace (--trace): a portable tool has no console, and
+        // z-order problems are impossible to reason about without a log.
+        private static readonly bool TraceEnabled =
+            Environment.GetCommandLineArgs().Any(a => a.Equals("--trace", StringComparison.OrdinalIgnoreCase));
+
+        private static void Trace(string message)
+        {
+            if (!TraceEnabled)
+            {
+                return;
+            }
+
+            try
+            {
+                System.IO.File.AppendAllText(
+                    System.IO.Path.Combine(AppContext.BaseDirectory, "trace.log"),
+                    DateTime.Now.ToString("HH:mm:ss.fff") + "  " + message + Environment.NewLine);
+            }
+            catch
+            {
+            }
+        }
+
+        private static string Describe(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero)
+            {
+                return "0x0(none)";
+            }
+
+            return "0x" + hwnd.ToString("X") + ":" + Win32.TryGetWindowTitle(hwnd);
         }
 
         private void UpdateShade(IntPtr shadedHwnd, WindowShade windowShade)
@@ -529,6 +743,15 @@ namespace PowerDimmer
 
         /// <summary>"off", "exclude" or "only" - see WindowFilter.</summary>
         string FilterMode { get; set; }
+
+        /// <summary>Grace period after a focus change, in milliseconds (0 = off).</summary>
+        int SwitchDelayMs { get; set; }
+
+        /// <summary>Keep a soft hole in the mask around the mouse pointer.</summary>
+        bool SpotlightEnabled { get; set; }
+
+        /// <summary>Spotlight hole radius in DIPs.</summary>
+        double SpotlightRadius { get; set; }
 
         /// <summary>Substrings matched against process name, exe path and window title.</summary>
         List<string> FilterKeywords { get; set; }

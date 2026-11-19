@@ -36,6 +36,21 @@ namespace PowerDimmer
             ["Menu.Preset50"] = ("50%", "50%"),
             ["Menu.Preset25"] = ("25%  轻压暗", "25%  Light"),
 
+            ["Menu.SwitchDelay"] = ("切换延迟（旧窗口保持高亮）", "Switch delay (keep previous window)"),
+            ["Menu.DelayOff"] = ("关闭：立即压暗", "Off - dim immediately"),
+            ["Menu.Delay200"] = ("0.2 秒", "0.2 s"),
+            ["Menu.Delay300"] = ("0.3 秒", "0.3 s"),
+            ["Menu.Delay500"] = ("0.5 秒", "0.5 s"),
+            ["Menu.Delay1000"] = ("1 秒", "1 s"),
+
+            ["Menu.Spotlight"] = ("鼠标聚光灯", "Cursor spotlight"),
+            ["Menu.SpotlightEnabled"] = ("鼠标周围不压暗", "Keep area around cursor bright"),
+            ["Menu.SpotlightRadius"] = ("光孔半径", "Hole radius"),
+            ["Menu.SpotlightSmall"] = ("小  100", "Small  100"),
+            ["Menu.SpotlightMedium"] = ("中  140", "Medium  140"),
+            ["Menu.SpotlightLarge"] = ("大  200", "Large  200"),
+            ["Menu.SpotlightXl"] = ("特大  280", "Extra large  280"),
+
             ["Menu.MaskColor"] = ("遮罩颜色", "Mask color"),
             ["Menu.ColorBlack"] = ("纯黑", "Black"),
             ["Menu.ColorCharcoal"] = ("深灰", "Charcoal"),

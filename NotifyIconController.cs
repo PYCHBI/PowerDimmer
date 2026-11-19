@@ -31,6 +31,9 @@ namespace PowerDimmer
         private ToolStripMenuItem? startWithWindowsItem;
         private TrackBarMenuItem? sliderRow;
         private readonly List<(ToolStripMenuItem Item, int Level)> presetItems = new();
+        private readonly List<(ToolStripMenuItem Item, int Ms)> delayItems = new();
+        private readonly List<(ToolStripMenuItem Item, double Radius)> spotlightRadiusItems = new();
+        private ToolStripMenuItem? spotlightItem;
         private readonly List<(ToolStripMenuItem Item, string Color)> colorItems = new();
         private readonly List<(ToolStripMenuItem Item, string Language)> languageItems = new();
         private readonly List<(ToolStripMenuItem Item, string Mode)> filterModeItems = new();
@@ -126,6 +129,9 @@ namespace PowerDimmer
             startWithWindowsItem = null;
             sliderRow = null;
             presetItems.Clear();
+            delayItems.Clear();
+            spotlightRadiusItems.Clear();
+            spotlightItem = null;
             colorItems.Clear();
             languageItems.Clear();
             filterModeItems.Clear();
@@ -171,6 +177,32 @@ namespace PowerDimmer
                 AddPreset(sub, "Menu.Preset75", 75);
                 AddPreset(sub, "Menu.Preset50", 50);
                 AddPreset(sub, "Menu.Preset25", 25);
+            });
+
+            builder.AddSubmenu(Loc.T("Menu.SwitchDelay"), sub =>
+            {
+                AddDelay(sub, "Menu.DelayOff", 0);
+                AddDelay(sub, "Menu.Delay200", 200);
+                AddDelay(sub, "Menu.Delay300", 300);
+                AddDelay(sub, "Menu.Delay500", 500);
+                AddDelay(sub, "Menu.Delay1000", 1000);
+            });
+
+            builder.AddSubmenu(Loc.T("Menu.Spotlight"), sub =>
+            {
+                sub.AddToggle(option => option
+                    .SetText(Loc.T("Menu.SpotlightEnabled"))
+                    .SetChecked(settings.SpotlightEnabled)
+                    .ConfigureItem(item => spotlightItem = item)
+                    .AddHandler(b => settings.SpotlightEnabled = b));
+
+                sub.AddSubmenu(Loc.T("Menu.SpotlightRadius"), radius =>
+                {
+                    AddSpotlightRadius(radius, "Menu.SpotlightSmall", 100);
+                    AddSpotlightRadius(radius, "Menu.SpotlightMedium", 140);
+                    AddSpotlightRadius(radius, "Menu.SpotlightLarge", 200);
+                    AddSpotlightRadius(radius, "Menu.SpotlightXl", 280);
+                });
             });
 
             builder.AddSubmenu(Loc.T("Menu.MaskColor"), sub =>
@@ -257,6 +289,42 @@ namespace PowerDimmer
                     }
 
                     settings.DimLevel = level;
+                    SyncMenuState();
+                }));
+        }
+
+        private void AddDelay(ContextMenuStripBuilder builder, string textKey, int milliseconds)
+        {
+            builder.AddToggle(option => option
+                .SetText(Loc.T(textKey))
+                .SetChecked(settings.SwitchDelayMs == milliseconds)
+                .ConfigureItem(item => delayItems.Add((item, milliseconds)))
+                .AddHandler(b =>
+                {
+                    if (!b)
+                    {
+                        return;
+                    }
+
+                    settings.SwitchDelayMs = milliseconds;
+                    SyncMenuState();
+                }));
+        }
+
+        private void AddSpotlightRadius(ContextMenuStripBuilder builder, string textKey, double radius)
+        {
+            builder.AddToggle(option => option
+                .SetText(Loc.T(textKey))
+                .SetChecked(Math.Abs(settings.SpotlightRadius - radius) < 0.5)
+                .ConfigureItem(item => spotlightRadiusItems.Add((item, radius)))
+                .AddHandler(b =>
+                {
+                    if (!b)
+                    {
+                        return;
+                    }
+
+                    settings.SpotlightRadius = radius;
                     SyncMenuState();
                 }));
         }
@@ -399,6 +467,21 @@ namespace PowerDimmer
             foreach (var (item, level) in presetItems)
             {
                 item.Checked = settings.DimLevel == level;
+            }
+
+            foreach (var (item, ms) in delayItems)
+            {
+                item.Checked = settings.SwitchDelayMs == ms;
+            }
+
+            if (spotlightItem != null)
+            {
+                spotlightItem.Checked = settings.SpotlightEnabled;
+            }
+
+            foreach (var (item, radius) in spotlightRadiusItems)
+            {
+                item.Checked = Math.Abs(settings.SpotlightRadius - radius) < 0.5;
             }
 
             foreach (var (item, color) in colorItems)
