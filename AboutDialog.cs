@@ -50,7 +50,7 @@ namespace PowerDimmer
 
             root.Children.Add(new TextBlock
             {
-                Text = $"v{AppInfo.Version}   ·   {Loc.T("About.Built")} {AppInfo.BuildTime}",
+                Text = $"v{AppInfo.Version}",
                 Foreground = AccentBrush,
                 Margin = new Thickness(1, 8, 0, 0),
                 FontSize = 14
@@ -70,8 +70,8 @@ namespace PowerDimmer
             rows.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             var index = 0;
-            AddRow(rows, ref index, Loc.T("About.Version"), $"v{AppInfo.Version}");
             AddRow(rows, ref index, Loc.T("About.Runtime"), AppInfo.Runtime);
+            AddRow(rows, ref index, Loc.T("About.Exe"), AppInfo.ExePath, mono: true);
             AddRow(rows, ref index, Loc.T("About.Config"),
                 string.IsNullOrWhiteSpace(configPath) ? Loc.T("Hint.NoConfig") : configPath!, mono: true);
             AddRow(rows, ref index, Loc.T("About.Project"), AppInfo.ProjectUrl);

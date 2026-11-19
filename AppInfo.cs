@@ -25,9 +25,6 @@ namespace PowerDimmer
         /// <summary>e.g. "1.1.0". Never null, never empty.</summary>
         public static string Version { get; } = ReadVersion();
 
-        /// <summary>Build timestamp of the running exe, local time, "yyyy-MM-dd HH:mm".</summary>
-        public static string BuildTime { get; } = ReadBuildTime();
-
         /// <summary>e.g. ".NET 8.0.22".</summary>
         public static string Runtime { get; } =
             System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
@@ -74,30 +71,12 @@ namespace PowerDimmer
             }
         }
 
-        private static string ReadBuildTime()
-        {
-            try
-            {
-                var path = ExePath;
-                if (!string.IsNullOrEmpty(path) && File.Exists(path))
-                {
-                    return File.GetLastWriteTime(path).ToString("yyyy-MM-dd HH:mm");
-                }
-            }
-            catch
-            {
-            }
-
-            return "unknown";
-        }
-
         /// <summary>Plain-text block for the "copy" button - handy when filing an issue.</summary>
         public static string Describe()
         {
             return string.Join(Environment.NewLine, new[]
             {
                 $"{Name} {Version}",
-                $"built: {BuildTime}",
                 $"runtime: {Runtime}",
                 $"exe: {ExePath}",
                 $"os: {Environment.OSVersion.VersionString}",

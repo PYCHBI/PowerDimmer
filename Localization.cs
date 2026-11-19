@@ -79,7 +79,7 @@ namespace PowerDimmer
             ["About.Subtitle"] = ("录屏 / 演示用的屏幕遮罩：只留下当前窗口，其余压暗",
                                   "A screen mask for recording and demos: keep one window, dim the rest"),
             ["About.Version"] = ("版本", "Version"),
-            ["About.Built"] = ("构建于", "Built"),
+            ["About.Exe"] = ("程序位置", "Program"),
             ["About.Runtime"] = ("运行环境", "Runtime"),
             ["About.Config"] = ("配置文件", "Config file"),
             ["About.Project"] = ("项目主页", "Project page"),
