@@ -76,6 +76,10 @@ namespace PowerDimmer
         // 0 = move the mask immediately (old behaviour). See App.UpdateDimming.
         private int switchDelayMs = 300;
 
+        // How long the window we just left takes to fade to the current dim level instead
+        // of snapping dark. 0 = hard cut, which is what the mask used to do.
+        private int fadeOutMs = 250;
+
         // Cursor spotlight: punches a soft hole in the mask around the mouse pointer so
         // the area under it stays readable. Radius is in DIPs (scales with the monitor).
         private bool spotlightEnabled = false;
@@ -176,6 +180,16 @@ namespace PowerDimmer
             set => Set(ref switchDelayMs, Math.Clamp(value, 0, 2000));
         }
 
+        /// <summary>
+        /// How long the window we just left takes to fade to the current dim level, in
+        /// milliseconds. 0 = hard cut (the mask is a SetWindowPos, it cannot animate).
+        /// </summary>
+        public int FadeOutMs
+        {
+            get => fadeOutMs;
+            set => Set(ref fadeOutMs, Math.Clamp(value, 0, 1500));
+        }
+
         /// <summary>Keep the area around the mouse pointer un-dimmed.</summary>
         public bool SpotlightEnabled
         {
@@ -256,6 +270,11 @@ namespace PowerDimmer
             if (dto.switchDelayMs != null)
             {
                 SwitchDelayMs = dto.switchDelayMs.Value;
+            }
+
+            if (dto.fadeOutMs != null)
+            {
+                FadeOutMs = dto.fadeOutMs.Value;
             }
 
             if (dto.spotlightEnabled != null)
@@ -474,6 +493,7 @@ namespace PowerDimmer
             filterMode = WindowFilter.NormalizeMode(dto.filterMode ?? filterMode);
             filterKeywords = WindowFilter.NormalizeKeywords(dto.filterKeywords ?? filterKeywords);
             switchDelayMs = Math.Clamp(dto.switchDelayMs ?? switchDelayMs, 0, 2000);
+            fadeOutMs = Math.Clamp(dto.fadeOutMs ?? fadeOutMs, 0, 1500);
             spotlightEnabled = dto.spotlightEnabled ?? spotlightEnabled;
             spotlightRadius = Math.Clamp(dto.spotlightRadius ?? spotlightRadius, 20, 1200);
         }
@@ -492,6 +512,7 @@ namespace PowerDimmer
             filterMode = filterMode,
             filterKeywords = filterKeywords,
             switchDelayMs = switchDelayMs,
+            fadeOutMs = fadeOutMs,
             spotlightEnabled = spotlightEnabled,
             spotlightRadius = spotlightRadius
         };
@@ -513,6 +534,7 @@ namespace PowerDimmer
             public string? filterMode { get; set; }
             public List<string>? filterKeywords { get; set; }
             public int? switchDelayMs { get; set; }
+            public int? fadeOutMs { get; set; }
             public bool? spotlightEnabled { get; set; }
             public double? spotlightRadius { get; set; }
         }

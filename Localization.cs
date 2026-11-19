@@ -43,6 +43,13 @@ namespace PowerDimmer
             ["Menu.Delay500"] = ("0.5 秒", "0.5 s"),
             ["Menu.Delay1000"] = ("1 秒", "1 s"),
 
+            ["Menu.FadeOut"] = ("压暗渐变（缓慢变暗）", "Fade out (ease into dim)"),
+            ["Menu.FadeOff"] = ("关闭：瞬间变暗", "Off - snap to dark"),
+            ["Menu.Fade150"] = ("0.15 秒", "0.15 s"),
+            ["Menu.Fade250"] = ("0.25 秒", "0.25 s"),
+            ["Menu.Fade400"] = ("0.4 秒", "0.4 s"),
+            ["Menu.Fade600"] = ("0.6 秒", "0.6 s"),
+
             ["Menu.Spotlight"] = ("鼠标聚光灯", "Cursor spotlight"),
             ["Menu.SpotlightEnabled"] = ("鼠标周围不压暗", "Keep area around cursor bright"),
             ["Menu.SpotlightRadius"] = ("光孔半径", "Hole radius"),

@@ -32,6 +32,7 @@ namespace PowerDimmer
         private TrackBarMenuItem? sliderRow;
         private readonly List<(ToolStripMenuItem Item, int Level)> presetItems = new();
         private readonly List<(ToolStripMenuItem Item, int Ms)> delayItems = new();
+        private readonly List<(ToolStripMenuItem Item, int Ms)> fadeItems = new();
         private readonly List<(ToolStripMenuItem Item, double Radius)> spotlightRadiusItems = new();
         private ToolStripMenuItem? spotlightItem;
         private readonly List<(ToolStripMenuItem Item, string Color)> colorItems = new();
@@ -130,6 +131,7 @@ namespace PowerDimmer
             sliderRow = null;
             presetItems.Clear();
             delayItems.Clear();
+            fadeItems.Clear();
             spotlightRadiusItems.Clear();
             spotlightItem = null;
             colorItems.Clear();
@@ -186,6 +188,15 @@ namespace PowerDimmer
                 AddDelay(sub, "Menu.Delay300", 300);
                 AddDelay(sub, "Menu.Delay500", 500);
                 AddDelay(sub, "Menu.Delay1000", 1000);
+            });
+
+            builder.AddSubmenu(Loc.T("Menu.FadeOut"), sub =>
+            {
+                AddFade(sub, "Menu.FadeOff", 0);
+                AddFade(sub, "Menu.Fade150", 150);
+                AddFade(sub, "Menu.Fade250", 250);
+                AddFade(sub, "Menu.Fade400", 400);
+                AddFade(sub, "Menu.Fade600", 600);
             });
 
             builder.AddSubmenu(Loc.T("Menu.Spotlight"), sub =>
@@ -307,6 +318,24 @@ namespace PowerDimmer
                     }
 
                     settings.SwitchDelayMs = milliseconds;
+                    SyncMenuState();
+                }));
+        }
+
+        private void AddFade(ContextMenuStripBuilder builder, string textKey, int milliseconds)
+        {
+            builder.AddToggle(option => option
+                .SetText(Loc.T(textKey))
+                .SetChecked(settings.FadeOutMs == milliseconds)
+                .ConfigureItem(item => fadeItems.Add((item, milliseconds)))
+                .AddHandler(b =>
+                {
+                    if (!b)
+                    {
+                        return;
+                    }
+
+                    settings.FadeOutMs = milliseconds;
                     SyncMenuState();
                 }));
         }
@@ -472,6 +501,11 @@ namespace PowerDimmer
             foreach (var (item, ms) in delayItems)
             {
                 item.Checked = settings.SwitchDelayMs == ms;
+            }
+
+            foreach (var (item, ms) in fadeItems)
+            {
+                item.Checked = settings.FadeOutMs == ms;
             }
 
             if (spotlightItem != null)

@@ -115,7 +115,7 @@ namespace PowerDimmer
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
-        static extern bool IsWindowVisible(IntPtr hWnd);
+        public static extern bool IsWindowVisible(IntPtr hWnd);
 
         private delegate bool EnumedWindow(IntPtr window, int lParam);
 

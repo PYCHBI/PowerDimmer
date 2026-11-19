@@ -25,6 +25,10 @@ namespace PowerDimmer
         // Stacking / spotlight bookkeeping.
         private IntPtr lastDimTarget;                 // window dimmed around last time
         private IntPtr pendingMaskAnchor;             // where the mask should end up
+        private IntPtr maskAnchor;                    // window the mask currently sits under
+        private DimWindow? fadeWindow;                // temporary fade-out overlay, if any
+        private IntPtr fadeTargetWindow;              // window the running fade belongs to
+        private int fadeGeneration;                   // invalidates stale fade callbacks
         private System.Windows.Threading.DispatcherTimer? switchDelayTimer;
         private System.Windows.Threading.DispatcherTimer? spotlightTimer;
         private Win32.POINT lastCursor;
@@ -323,6 +327,7 @@ namespace PowerDimmer
         {
             masksHidden = false;
             lastDimTarget = IntPtr.Zero;
+            maskAnchor = IntPtr.Zero;
             var opacity = DimToOpacity(settings.DimLevel);
             var screens = settings.MultiMonitorDimming
                 ? System.Windows.Forms.Screen.AllScreens
@@ -351,6 +356,8 @@ namespace PowerDimmer
             masksHidden = false;
             lastDimTarget = IntPtr.Zero;
             CancelMaskMove();
+            CancelFade();
+            maskAnchor = IntPtr.Zero;
             StopSpotlightTracking(clear: true);
             dimWindows.ForEach(w => w.Close());
             dimWindows.Clear();
@@ -431,6 +438,22 @@ namespace PowerDimmer
                     win.ClearSpotlight();
                 }
             }
+
+            // The fade overlay has to follow the cursor too, otherwise the hole in the
+            // real mask would be filled in while the old window is still fading out.
+            if (fadeWindow != null)
+            {
+                var bounds = fadeWindow.ScreenBounds;
+                if (cursor.X >= bounds.Left && cursor.X < bounds.Right &&
+                    cursor.Y >= bounds.Top && cursor.Y < bounds.Bottom)
+                {
+                    fadeWindow.SetSpotlight(cursor.X, cursor.Y, settings.SpotlightRadius);
+                }
+                else
+                {
+                    fadeWindow.ClearSpotlight();
+                }
+            }
         }
 
         // https://stackoverflow.com/questions/4372055/detect-active-window-changed-using-c-sharp-without-polling/10280800#10280800
@@ -493,6 +516,13 @@ namespace PowerDimmer
             }
 
             masksHidden = hidden;
+            if (hidden)
+            {
+                // A fade overlay on screen would keep one window dark while the mask is
+                // supposedly hidden.
+                CancelFade();
+            }
+
             foreach (var window in dimWindows)
             {
                 if (hidden)
@@ -567,13 +597,14 @@ namespace PowerDimmer
                 // just left; moving it now would end the grace period before it started,
                 // and anchoring it to `previous` can drag it anywhere in the z-order
                 // (a previously focused, now hidden window is not below the new one).
+                CancelFade();
                 ScheduleMaskMove(anchor, delay);
                 Trace($"linger: fg={Describe(fgHwnd)} prev={Describe(previous)}");
             }
             else
             {
                 CancelMaskMove();
-                PlaceMasksBelow(anchor);
+                MoveMasksBelow(anchor);
                 Trace($"now: fg={Describe(fgHwnd)} delay={delay} prev={Describe(previous)}");
             }
 
@@ -596,6 +627,130 @@ namespace PowerDimmer
             {
                 Win32.SetWindowPos(dimWin.Handle, anchor, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
             }
+
+            maskAnchor = anchor;
+        }
+
+        /// <summary>
+        /// Moves the masks below <paramref name="anchor"/>, fading the window we are
+        /// leaving instead of cutting to black.
+        ///
+        /// A SetWindowPos can only be instantaneous, so the fade is a temporary overlay
+        /// sitting on top of the old window: it starts fully transparent and animates up
+        /// to the current dim level. It is inserted *below* the new foreground window, so
+        /// only the window we left darkens - the new one never twitches. Once the overlay
+        /// has reached full strength the real mask is moved underneath, which is now a
+        /// pixel-for-pixel no-op.
+        /// </summary>
+        private void MoveMasksBelow(IntPtr anchor)
+        {
+            var fadeMs = Math.Clamp(settings.FadeOutMs, 0, 1500);
+            var leaving = maskAnchor;
+
+            if (fadeMs <= 0 || leaving == IntPtr.Zero || leaving == anchor ||
+                !CanFadeFrom(leaving) || !TryGetBounds(leaving, out var bounds))
+            {
+                CancelFade();
+                PlaceMasksBelow(anchor);
+                return;
+            }
+
+            // Two switches in quick succession: if the running fade is already darkening
+            // exactly the window we are leaving, let it finish and only retarget where the
+            // mask lands. Restarting would flash that window back to full brightness.
+            if (fadeWindow != null && fadeTargetWindow == leaving)
+            {
+                pendingMaskAnchor = anchor;
+                Trace($"fade: retarget -> {Describe(anchor)}");
+                return;
+            }
+
+            // Otherwise drop the half-faded overlay and start over from whatever is
+            // actually bright right now.
+            CancelFade();
+
+            var overlay = new DimWindow(settings, bounds, maskBrush);
+            overlay.SetSurfaceOpacity(0);
+            overlay.Show();
+
+            Win32.SetWindowPos(overlay.Handle, anchor, 0, 0, 0, 0,
+                Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+
+            if (settings.SpotlightEnabled && Win32.GetCursorPos(out var cursor) &&
+                bounds.Contains(cursor.X, cursor.Y))
+            {
+                overlay.SetSpotlight(cursor.X, cursor.Y, settings.SpotlightRadius);
+            }
+
+            fadeWindow = overlay;
+            fadeTargetWindow = leaving;
+            pendingMaskAnchor = anchor;
+            var generation = ++fadeGeneration;
+
+            overlay.FadeSurface(DimToOpacity(settings.DimLevel), TimeSpan.FromMilliseconds(fadeMs), () =>
+            {
+                if (generation != fadeGeneration)
+                {
+                    return; // superseded by a newer switch
+                }
+
+                CancelFade();
+                if (!settings.DimmingEnabled || masksHidden)
+                {
+                    return;
+                }
+
+                // The target may have been closed while we were fading.
+                var target = Win32.IsWindow(pendingMaskAnchor) ? pendingMaskAnchor : curFgHwnd;
+                PlaceMasksBelow(target);
+                Trace($"fade: done -> {Describe(target)}");
+            });
+
+            Trace($"fade: {fadeMs}ms from {Describe(leaving)} to {Describe(anchor)}");
+        }
+
+        private static bool CanFadeFrom(IntPtr hwnd) =>
+            Win32.IsWindow(hwnd) && Win32.IsWindowVisible(hwnd) && !Win32.IsIconic(hwnd);
+
+        private static bool TryGetBounds(IntPtr hwnd, out System.Drawing.Rectangle bounds)
+        {
+            bounds = default;
+            if (!Win32.GetWindowRect(hwnd, out var rect))
+            {
+                return false;
+            }
+
+            var width = rect.Right - rect.Left;
+            var height = rect.Bottom - rect.Top;
+            if (width <= 0 || height <= 0)
+            {
+                return false;
+            }
+
+            bounds = new System.Drawing.Rectangle(rect.Left, rect.Top, width, height);
+            return true;
+        }
+
+        /// <summary>Closes the fade overlay, if one is running, and voids its callback.</summary>
+        private void CancelFade()
+        {
+            fadeGeneration++;
+            fadeTargetWindow = IntPtr.Zero;
+
+            var window = fadeWindow;
+            fadeWindow = null;
+            if (window == null)
+            {
+                return;
+            }
+
+            try
+            {
+                window.Close();
+            }
+            catch
+            {
+            }
         }
 
         private void ScheduleMaskMove(IntPtr anchor, int delayMs)
@@ -614,7 +769,7 @@ namespace PowerDimmer
 
                     // The window we were heading to may have been closed in the meantime.
                     var anchor = Win32.IsWindow(pendingMaskAnchor) ? pendingMaskAnchor : curFgHwnd;
-                    PlaceMasksBelow(anchor);
+                    MoveMasksBelow(anchor);
                     Trace($"tick: mask -> {Describe(anchor)}");
                 };
             }
@@ -746,6 +901,9 @@ namespace PowerDimmer
 
         /// <summary>Grace period after a focus change, in milliseconds (0 = off).</summary>
         int SwitchDelayMs { get; set; }
+
+        /// <summary>How long the window we left takes to darken, in milliseconds (0 = snap).</summary>
+        int FadeOutMs { get; set; }
 
         /// <summary>Keep a soft hole in the mask around the mouse pointer.</summary>
         bool SpotlightEnabled { get; set; }

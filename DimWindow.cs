@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 
 namespace PowerDimmer
@@ -77,6 +78,40 @@ namespace PowerDimmer
             {
                 _surface.OpacityMask = _hole;
             }
+        }
+
+        /// <summary>
+        /// Opacity of the painted surface (0..1), independent of Window.Opacity.
+        /// The fade-out overlay starts here at 0 and animates up to the dim level.
+        /// </summary>
+        public void SetSurfaceOpacity(double value)
+        {
+            _surface.BeginAnimation(UIElement.OpacityProperty, null);
+            _surface.Opacity = Math.Clamp(value, 0.0, 1.0);
+        }
+
+        /// <summary>
+        /// Animates the surface to <paramref name="to"/>. Animated on the rectangle
+        /// rather than on Window.Opacity: the window is a layered HWND and WPF pushes
+        /// per-frame alpha into it, which is both slower and coarser than a pure
+        /// composition animation.
+        /// </summary>
+        public void FadeSurface(double to, TimeSpan duration, Action? completed)
+        {
+            var animation = new DoubleAnimation
+            {
+                To = Math.Clamp(to, 0.0, 1.0),
+                Duration = new Duration(duration),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut },
+                FillBehavior = FillBehavior.HoldEnd
+            };
+
+            if (completed != null)
+            {
+                animation.Completed += (_, _) => completed();
+            }
+
+            _surface.BeginAnimation(UIElement.OpacityProperty, animation);
         }
 
         /// <summary>Removes the spotlight hole - the mask becomes solid again.</summary>
