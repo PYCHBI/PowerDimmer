@@ -38,6 +38,13 @@ namespace PowerDimmer
         private const string ScratchSuffix = ".new";
         private const int SaveDebounceMs = 400;
 
+        // Shared with the tray menu's "custom..." dialog so the limits the user sees and
+        // the limits enforced on load are literally the same numbers.
+        public const int SwitchDelayMinMs = 0;
+        public const int SwitchDelayMaxMs = 5000;
+        public const int FadeOutMinMs = 0;
+        public const int FadeOutMaxMs = 5000;
+
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
             WriteIndented = true,
@@ -177,7 +184,7 @@ namespace PowerDimmer
         public int SwitchDelayMs
         {
             get => switchDelayMs;
-            set => Set(ref switchDelayMs, Math.Clamp(value, 0, 2000));
+            set => Set(ref switchDelayMs, Math.Clamp(value, SwitchDelayMinMs, SwitchDelayMaxMs));
         }
 
         /// <summary>
@@ -187,7 +194,7 @@ namespace PowerDimmer
         public int FadeOutMs
         {
             get => fadeOutMs;
-            set => Set(ref fadeOutMs, Math.Clamp(value, 0, 1500));
+            set => Set(ref fadeOutMs, Math.Clamp(value, FadeOutMinMs, FadeOutMaxMs));
         }
 
         /// <summary>Keep the area around the mouse pointer un-dimmed.</summary>
@@ -492,8 +499,8 @@ namespace PowerDimmer
             language = Loc.Normalize(dto.language ?? language);
             filterMode = WindowFilter.NormalizeMode(dto.filterMode ?? filterMode);
             filterKeywords = WindowFilter.NormalizeKeywords(dto.filterKeywords ?? filterKeywords);
-            switchDelayMs = Math.Clamp(dto.switchDelayMs ?? switchDelayMs, 0, 2000);
-            fadeOutMs = Math.Clamp(dto.fadeOutMs ?? fadeOutMs, 0, 1500);
+            switchDelayMs = Math.Clamp(dto.switchDelayMs ?? switchDelayMs, SwitchDelayMinMs, SwitchDelayMaxMs);
+            fadeOutMs = Math.Clamp(dto.fadeOutMs ?? fadeOutMs, FadeOutMinMs, FadeOutMaxMs);
             spotlightEnabled = dto.spotlightEnabled ?? spotlightEnabled;
             spotlightRadius = Math.Clamp(dto.spotlightRadius ?? spotlightRadius, 20, 1200);
         }

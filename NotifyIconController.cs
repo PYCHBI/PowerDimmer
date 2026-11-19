@@ -188,6 +188,10 @@ namespace PowerDimmer
                 AddDelay(sub, "Menu.Delay300", 300);
                 AddDelay(sub, "Menu.Delay500", 500);
                 AddDelay(sub, "Menu.Delay1000", 1000);
+                sub.AddSeparator();
+                sub.AddButton(option => option
+                    .SetText(CustomCaption(settings.SwitchDelayMs, delayItems.Select(x => x.Ms)))
+                    .AddHandler(() => EditDuration(false)));
             });
 
             builder.AddSubmenu(Loc.T("Menu.FadeOut"), sub =>
@@ -197,6 +201,10 @@ namespace PowerDimmer
                 AddFade(sub, "Menu.Fade250", 250);
                 AddFade(sub, "Menu.Fade400", 400);
                 AddFade(sub, "Menu.Fade600", 600);
+                sub.AddSeparator();
+                sub.AddButton(option => option
+                    .SetText(CustomCaption(settings.FadeOutMs, fadeItems.Select(x => x.Ms)))
+                    .AddHandler(() => EditDuration(true)));
             });
 
             builder.AddSubmenu(Loc.T("Menu.Spotlight"), sub =>
@@ -438,6 +446,49 @@ namespace PowerDimmer
 
             ShowMessage(string.Format(Loc.T("Msg.RuleAdded"), name));
             RebuildMenu();
+        }
+
+        /// <summary>
+        /// "自定义…" caption. When the value in effect is not one of the presets above it,
+        /// the caption carries the actual number - otherwise nothing in the submenu would
+        /// be ticked and the current setting would be invisible.
+        /// </summary>
+        private static string CustomCaption(int current, IEnumerable<int> presets)
+        {
+            var text = Loc.T("Menu.Custom");
+            return presets.Contains(current) ? text : Loc.T("Menu.CustomCurrent", text, DurationInput.Describe(current));
+        }
+
+        private void EditDuration(bool fade)
+        {
+            // Deferred for the same reason as EditRules below: a modal window opened
+            // straight from a menu click keeps the menu's message loop nested under it.
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+            {
+                var min = fade ? Settings.FadeOutMinMs : Settings.SwitchDelayMinMs;
+                var max = fade ? Settings.FadeOutMaxMs : Settings.SwitchDelayMaxMs;
+                var current = fade ? settings.FadeOutMs : settings.SwitchDelayMs;
+
+                var dialog = new DurationDialog(
+                    Loc.T(fade ? "Dlg.FadeTitle" : "Dlg.DelayTitle"), current, min, max);
+
+                if (dialog.ShowDialog() != true)
+                {
+                    return;
+                }
+
+                if (fade)
+                {
+                    settings.FadeOutMs = dialog.Milliseconds;
+                }
+                else
+                {
+                    settings.SwitchDelayMs = dialog.Milliseconds;
+                }
+
+                // The caption shows the new value, so the menu has to be rebuilt.
+                RebuildMenu();
+            }));
         }
 
         private void EditRules()

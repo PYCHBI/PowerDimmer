@@ -225,6 +225,26 @@ namespace PowerDimmer
             {
                 new AboutDialog((settings as Settings)?.FilePath).ShowDialog();
             }
+            // Debug helper: open either timing dialog without going through the tray menu,
+            // and apply the result exactly like the menu does.
+            if (e.Args.Any(a => a.Equals("--duration-delay", StringComparison.OrdinalIgnoreCase)))
+            {
+                var dialog = new DurationDialog(Loc.T("Dlg.DelayTitle"), settings.SwitchDelayMs,
+                    Settings.SwitchDelayMinMs, Settings.SwitchDelayMaxMs);
+                if (dialog.ShowDialog() == true)
+                {
+                    settings.SwitchDelayMs = dialog.Milliseconds;
+                }
+            }
+            if (e.Args.Any(a => a.Equals("--duration-fade", StringComparison.OrdinalIgnoreCase)))
+            {
+                var dialog = new DurationDialog(Loc.T("Dlg.FadeTitle"), settings.FadeOutMs,
+                    Settings.FadeOutMinMs, Settings.FadeOutMaxMs);
+                if (dialog.ShowDialog() == true)
+                {
+                    settings.FadeOutMs = dialog.Milliseconds;
+                }
+            }
 
             Exit += (e, s) =>
             {
@@ -585,7 +605,7 @@ namespace PowerDimmer
 
             var anchor = firstPinned ?? fgHwnd;
             var previous = lastDimTarget;
-            var delay = Math.Clamp(settings.SwitchDelayMs, 0, 2000);
+            var delay = Math.Clamp(settings.SwitchDelayMs, Settings.SwitchDelayMinMs, Settings.SwitchDelayMaxMs);
 
             // Switch delay: right after the focus moves, park the mask under the window we
             // just left instead of the new one. Everything above the mask stays readable,
@@ -644,7 +664,7 @@ namespace PowerDimmer
         /// </summary>
         private void MoveMasksBelow(IntPtr anchor)
         {
-            var fadeMs = Math.Clamp(settings.FadeOutMs, 0, 1500);
+            var fadeMs = Math.Clamp(settings.FadeOutMs, Settings.FadeOutMinMs, Settings.FadeOutMaxMs);
             var leaving = maskAnchor;
 
             if (fadeMs <= 0 || leaving == IntPtr.Zero || leaving == anchor ||
@@ -700,13 +720,20 @@ namespace PowerDimmer
                     return;
                 }
 
-                // Order matters. The mask is still sitting *under* the window we are
-                // leaving, so the overlay is the only thing keeping it dark. Dropping the
-                // overlay first exposed that window for one composed frame - that was the
-                // flash. Move the mask onto the target first, then take the overlay away
-                // a frame later, by which time both layers are identical anyway.
+                // The mask is still sitting *under* the window we are leaving, so the
+                // overlay is the only thing keeping it dark. Both changes (mask under the
+                // new window, overlay gone) have to land together - either one alone
+                // produces a visible frame: dropping the overlay first is a bright flash,
+                // moving the mask first is a double-dark layer.
                 var target = Win32.IsWindow(pendingMaskAnchor) ? pendingMaskAnchor : curFgHwnd;
-                PlaceMasksBelow(target);
+                if (!HandOverToMask(target, overlay))
+                {
+                    // Batched move unavailable: fall back to the two-step version. It costs
+                    // one composed frame in which both layers cover the window.
+                    PlaceMasksBelow(target);
+                    overlay.SetSurfaceOpacity(0);
+                }
+
                 Trace($"fade: done -> {Describe(target)}");
                 DiscardOverlayAfterFrame(overlay);
             });
@@ -733,6 +760,63 @@ namespace PowerDimmer
             }
 
             bounds = new System.Drawing.Rectangle(rect.Left, rect.Top, width, height);
+            return true;
+        }
+
+        /// <summary>
+        /// Swaps the fade overlay for the real mask in a single window-manager batch.
+        ///
+        /// At the end of a fade both layers cover the window pixel for pixel: alpha a over
+        /// alpha a is 1-(1-a)^2, so the mask looks one step darker than the level the user
+        /// picked and pops back the instant the overlay closes. Doing this as two separate
+        /// SetWindowPos / Close calls always leaves at least one composed frame in that
+        /// state, because DWM does not pick both changes up in the same frame.
+        ///
+        /// BeginDeferWindowPos queues both operations and applies them together: the masks
+        /// land under the target while the overlay is moved far off-screen, in one step. No
+        /// frame is ever composed with both layers visible, and none with neither.
+        /// </summary>
+        private bool HandOverToMask(IntPtr anchor, DimWindow overlay)
+        {
+            if (overlay.Handle == IntPtr.Zero || dimWindows.Count == 0)
+            {
+                return false;
+            }
+
+            var batch = Win32.BeginDeferWindowPos(dimWindows.Count + 1);
+            if (batch == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            foreach (var dimWin in dimWindows)
+            {
+                var next = Win32.DeferWindowPos(batch, dimWin.Handle, anchor, 0, 0, 0, 0,
+                    Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+                if (next == IntPtr.Zero)
+                {
+                    Win32.EndDeferWindowPos(batch);
+                    return false;
+                }
+
+                batch = next;
+            }
+
+            // Far outside any virtual desktop; z-order deliberately left alone.
+            var moved = Win32.DeferWindowPos(batch, overlay.Handle, IntPtr.Zero, -32000, -32000, 0, 0,
+                Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE | Win32.SWP_NOZORDER);
+            if (moved == IntPtr.Zero)
+            {
+                Win32.EndDeferWindowPos(batch);
+                return false;
+            }
+
+            if (!Win32.EndDeferWindowPos(moved))
+            {
+                return false;
+            }
+
+            maskAnchor = anchor;
             return true;
         }
 

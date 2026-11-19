@@ -7,7 +7,7 @@
 > | 代 | 仓库 | 做了什么 |
 > |---|---|---|
 > | 第一代 | [shayne/PowerDimmer](https://github.com/shayne/PowerDimmer) | 原版，.NET 6，基础遮罩 + 区域遮罩 + 快捷键 |
-> | 第二代 | 一个未具名的 fork（本仓库的基线） | 修混合 DPI 多显示器、加「点击桌面取消」「只遮主屏」开关、升 .NET 8 |
+> | 第二代 | [shtuseriff/PowerDimmer](https://github.com/shtuseriff/PowerDimmer)（本仓库的基线） | 修混合 DPI 多显示器、加「点击桌面取消」「只遮主屏」开关、升 .NET 8 |
 > | **第三代** | **本仓库 PYCHBI/PowerDimmer** | 修便携版启动崩溃、汉化、程序例外名单、重做滑块、加版本号与关于页 |
 >
 > 本文档从上往下依次是：**第三代改动 → 下载 / 升级 / 构建 → 第二代原文 → 第一代原文**。
@@ -22,6 +22,8 @@
 - **切换延迟**：托盘菜单 → `切换延迟`，可选 关闭 / 0.2 / 0.3 / 0.5 / 1 秒。切换窗口后的这段时间里，刚离开的窗口仍然保持高亮，只有超时之后才压暗——来回对照两个窗口时不用反复切。对应 `settings.json` 的 `switchDelayMs`（0 = 关闭）。
 - **压暗渐变**：托盘菜单 → `压暗渐变`，可选 关闭 / 0.15 / 0.25 / 0.4 / 0.6 秒（默认 0.25 秒）。切换延迟结束时不硬切到黑，而是让刚离开的窗口在设定时间内平滑变暗；新窗口全程保持高亮，背景亮度也不会变化。对应 `settings.json` 的 `fadeOutMs`（0 = 瞬间变暗）。
 - **鼠标聚光灯**：托盘菜单 → `鼠标聚光灯`，鼠标周围开一个边缘柔和的光孔（半径 100 / 140 / 200 / 280 可调），焦点窗口和鼠标附近同时保持清晰。对应 `settings.json` 的 `spotlightEnabled` / `spotlightRadius`（单位 DIP，随缩放等比）。
+- **时长可以手动输入**：`切换延迟` / `压暗渐变` 两个子菜单的末尾各有 `手动输入…`，预设之外的值也能填。可以写毫秒（`350`、`350ms`）也可以写秒（`0.35`、`0.35s`、`1.5 秒`），范围 0–5000 ms，0 表示关闭。输入时下方实时显示换算结果，超出范围则确定按钮变灰；当前值不是预设时，菜单项会带上实际值（如 `手动输入…（当前 0.35 秒）`），不会出现"一个勾都没有"的情况。
+- **修复渐变结束时的过暗闪变**：渐变收尾需要把临时渐隐层换成真正的遮罩，两层在同一块区域上重叠过一瞬，`alpha` 叠加成 `1-(1-a)²`，看着比设定浓度暗一档再弹回来（灰色遮罩尤其明显）。现在用 `BeginDeferWindowPos` 把"遮罩就位"和"渐隐层撤走"作为**一次原子提交**交给窗口管理器，任何一帧都不会出现双层或空层。
 - **默认不压暗任务栏**（基线默认压暗），需要时在菜单里勾选。
 - **版本号与详情页**：版本号唯一来源是 `PowerDimmer.csproj` 里的 `<Version>`，会同时出现在三处 —— 托盘菜单 `设置 → 关于 PowerDimmer`（显示版本、运行环境、程序位置、配置文件位置、项目地址，可一键复制版本信息）、exe 的「属性 → 详细信息」页、以及发布包的名称里。
 - 异常写 `crash.log`，方便定位。
@@ -57,10 +59,10 @@ dotnet publish -c Release -r win-x64 --self-contained false -o dist
 
 ---
 
-## 第二代 fork 的改动（本仓库的基线，非本仓库所为）
+## 第二代 fork 的改动（[shtuseriff/PowerDimmer](https://github.com/shtuseriff/PowerDimmer)，本仓库的基线，非本仓库所为）
 
 > 以下是本仓库 fork 时继承的上游说明，原文保留以便追溯。
-> **这一段里的 "this fork" 指的是第二代 fork，不是 PYCHBI fork。**
+> **这一段里的 "this fork" 指的是第二代 [shtuseriff/PowerDimmer](https://github.com/shtuseriff/PowerDimmer)，不是 PYCHBI fork。**
 
 This is a fork of [shayne/PowerDimmer](https://github.com/shayne/PowerDimmer). The original had a bug where dimming didn't work on external monitors in mixed-DPI setups ([issue #4](https://github.com/shayne/PowerDimmer/issues/4)), and I wanted a couple of extra features. No commits have been made to the original repo in 2+ years, so I fixed and extended it. Just did this for personal use. Not tested on any PCs except my own and haven't checked if the changes affect resource usage compared to the original, so YMMV.
 

@@ -18,6 +18,10 @@ namespace PowerDimmer
 
         public const string ProjectUrl = "https://github.com/PYCHBI/PowerDimmer";
 
+        // This repository is a fork of a fork: the version it started from is shtuseriff's,
+        // which in turn forked shayne's original. Both are credited, neither is "unnamed".
+        public const string BaselineUrl = "https://github.com/shtuseriff/PowerDimmer";
+
         public const string UpstreamUrl = "https://github.com/shayne/PowerDimmer";
 
         public const string License = "MIT";

@@ -50,6 +50,10 @@ namespace PowerDimmer
             ["Menu.Fade400"] = ("0.4 秒", "0.4 s"),
             ["Menu.Fade600"] = ("0.6 秒", "0.6 s"),
 
+            ["Menu.Custom"] = ("手动输入…", "Enter a value..."),
+            ["Menu.CustomCurrent"] = ("{0}（当前 {1}）", "{0}  (now {1})"),
+            ["Unit.Seconds"] = ("秒", "s"),
+
             ["Menu.Spotlight"] = ("鼠标聚光灯", "Cursor spotlight"),
             ["Menu.SpotlightEnabled"] = ("鼠标周围不压暗", "Keep area around cursor bright"),
             ["Menu.SpotlightRadius"] = ("光孔半径", "Hole radius"),
@@ -82,6 +86,13 @@ namespace PowerDimmer
 
             ["Dlg.Ok"] = ("确定", "OK"),
             ["Dlg.Cancel"] = ("取消", "Cancel"),
+            ["Dlg.DelayTitle"] = ("手动输入切换延迟", "Custom switch delay"),
+            ["Dlg.FadeTitle"] = ("手动输入压暗渐变", "Custom fade out"),
+            ["Dlg.DurationHint"] = ("可以输入毫秒（350、350ms），也可以输入秒（0.35、0.35s、1.5 秒）。0 表示关闭。",
+                                    "Milliseconds (350, 350ms) or seconds (0.35, 0.35s). 0 turns it off."),
+            ["Dlg.DurationPreview"] = ("= {0} 毫秒", "= {0} ms"),
+            ["Dlg.DurationInvalid"] = ("请输入 {0}–{1} 之间的数值，可带 ms 或 s 单位。",
+                                       "Enter a value between {0} and {1}; ms or s suffix allowed."),
             ["Dlg.FilterTitle"] = ("程序例外规则", "App exception rules"),
             ["Dlg.FilterHint"] = ("每行一条。可以填进程名（如 notepad）、exe 路径的一部分（如 WeChat），或窗口标题里的关键字（如 微信）。不区分大小写；三种会同时比对。",
                                   "One rule per line: a process name (e.g. notepad), part of the exe path (e.g. WeChat), or a window-title keyword. Case-insensitive; all three are checked."),
@@ -105,6 +116,7 @@ namespace PowerDimmer
             ["About.Runtime"] = ("运行环境", "Runtime"),
             ["About.Config"] = ("配置文件", "Config file"),
             ["About.Project"] = ("项目主页", "Project page"),
+            ["About.BasedOn"] = ("基于", "Based on"),
             ["About.Upstream"] = ("原项目", "Upstream"),
             ["About.License"] = ("许可", "License"),
             ["About.Copy"] = ("复制版本信息", "Copy version info"),

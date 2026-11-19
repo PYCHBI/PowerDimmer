@@ -49,6 +49,21 @@ namespace PowerDimmer
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
+        // Batched z-order/move changes. Everything queued between Begin and End is applied
+        // by the window manager in one go, so the desktop never shows an intermediate
+        // frame in which neither layer covers a window. Single SetWindowPos calls cannot
+        // give that guarantee, which is what produced the one-frame overdark artefact.
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr BeginDeferWindowPos(int nNumWindows);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr DeferWindowPos(IntPtr hWinPosInfo, IntPtr hWnd, IntPtr hWndInsertAfter,
+                                                   int X, int Y, int cx, int cy, uint uFlags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool EndDeferWindowPos(IntPtr hWinPosInfo);
+
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern IntPtr GetForegroundWindow();
 

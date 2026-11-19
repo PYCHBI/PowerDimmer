@@ -75,6 +75,7 @@ namespace PowerDimmer
             AddRow(rows, ref index, Loc.T("About.Config"),
                 string.IsNullOrWhiteSpace(configPath) ? Loc.T("Hint.NoConfig") : configPath!, mono: true);
             AddRow(rows, ref index, Loc.T("About.Project"), AppInfo.ProjectUrl);
+            AddRow(rows, ref index, Loc.T("About.BasedOn"), AppInfo.BaselineUrl);
             AddRow(rows, ref index, Loc.T("About.Upstream"), AppInfo.UpstreamUrl);
             AddRow(rows, ref index, Loc.T("About.License"), AppInfo.License);
 
