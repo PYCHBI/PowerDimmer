@@ -34,15 +34,26 @@ jobs:
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "version = $v"
 
-      - name: Build portable + lightweight zips
+      # Package layout (deliberately mirrors what most portable Windows apps ship):
+      #
+      #   PowerDimmer_1.1.0_x64-portable.zip
+      #     └─ PowerDimmer/            <- folder name has NO version, so unzipping a
+      #        ├─ PowerDimmer.exe         newer build over an existing folder merges
+      #        ├─ ...                     into the same directory instead of creating
+      #        └─ settings.json           a second copy next to the old one
+      #
+      # settings.json / crash.log are generated at run time and must never be in the
+      # archive: they live inside that same folder, and an "upgrade" would wipe them.
+      - name: Build packages
+        id: pack
         shell: pwsh
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          # The portable package is meant to be unzipped straight over an existing
-          # install, so:
-          #  * archive entries must sit at the zip root (no "portable/" prefix), and
-          #  * nothing user-generated (settings.json, crash.log) may be inside, or an
-          #    "upgrade" would silently wipe the user's config.
-          function Assert-Clean([string]$dir) {
+          $ErrorActionPreference = "Stop"
+          $folder = "PowerDimmer"
+
+          function Assert-NoUserData([string]$dir) {
             foreach ($bad in @("settings.json", "settings.json.new", "crash.log")) {
               if (Test-Path (Join-Path $dir $bad)) {
                 throw "Refusing to package: $bad found in $dir"
@@ -52,47 +63,53 @@ jobs:
             Get-ChildItem $dir | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
           }
 
-          dotnet publish -c Release -r win-x64 --self-contained true -o portable
-          Assert-Clean portable
-          Compress-Archive -Path "portable/*" -DestinationPath "PowerDimmer-portable.zip" -Force
-          Remove-Item -Recurse -Force portable
-
-          dotnet publish -c Release -o lightweight
-          Assert-Clean lightweight
-          Compress-Archive -Path "lightweight/*" -DestinationPath "PowerDimmer-requires-dotnet8.zip" -Force
-          Remove-Item -Recurse -Force lightweight
-
-          Write-Host "--- zip listings ---"
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          foreach ($zip in @("PowerDimmer-portable.zip", "PowerDimmer-requires-dotnet8.zip")) {
+          function Assert-Archive([string]$zip) {
             $a = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
             $names = $a.Entries | ForEach-Object { $_.FullName }
             $a.Dispose()
 
-            Write-Host "$zip :"
-            $names | ForEach-Object { Write-Host ("   " + $_) }
+            Write-Host "--- $zip ---"
+            $names | ForEach-Object { Write-Host "   $_" }
 
-            # Unzipping over an existing install only works if the program files sit at
-            # the archive root. A "portable/" wrapper folder would bury them one level
-            # deeper. (Subfolders like zh-Hans/ are legitimate .NET satellite resources.)
-            $wrapped = $names | Where-Object { $_ -like "portable/*" -or $_ -like "lightweight/*" }
-            if ($wrapped) { throw "$zip is wrapped in a folder: $($wrapped[0])" }
-            if ($names -notcontains "PowerDimmer.exe") { throw "$zip has no PowerDimmer.exe at its root" }
-            if ($names -contains "settings.json") { throw "$zip contains settings.json - an upgrade would wipe user config" }
-            if ($names -contains "crash.log") { throw "$zip contains crash.log" }
+            # Everything must live under the single "PowerDimmer/" folder.
+            $outside = $names | Where-Object { -not $_.StartsWith("$folder/") }
+            if ($outside) { throw "$zip has entries outside $folder/: $($outside[0])" }
+            if ($names -notcontains "$folder/PowerDimmer.exe") { throw "$zip has no $folder/PowerDimmer.exe" }
+
+            $userData = $names | Where-Object { $_ -match '(^|/)(settings\.json|settings\.json\.new|crash\.log)$' }
+            if ($userData) { throw "$zip contains user data: $($userData[0])" }
           }
+
+          # --- self-contained (no .NET needed) ---
+          dotnet publish -c Release -r win-x64 --self-contained true -o "stage-portable/$folder"
+          Assert-NoUserData "stage-portable/$folder"
+          $portable = "PowerDimmer_$($env:VERSION)_x64-portable.zip"
+          Compress-Archive -Path "stage-portable/$folder" -DestinationPath $portable -Force
+          Assert-Archive $portable
+
+          # --- framework dependent (smaller, needs .NET 8 Desktop Runtime) ---
+          dotnet publish -c Release -o "stage-light/$folder"
+          Assert-NoUserData "stage-light/$folder"
+          $light = "PowerDimmer_$($env:VERSION)_x64-requires-dotnet8.zip"
+          Compress-Archive -Path "stage-light/$folder" -DestinationPath $light -Force
+          Assert-Archive $light
+
+          "portable_zip=$portable" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "light_zip=$light" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest Build (v${{ steps.ver.outputs.version }})
           body: |
-            **PowerDimmer-portable.zip** — Self-contained, no .NET required. Just extract and run.
-            **PowerDimmer-requires-dotnet8.zip** — Smaller download, requires [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) installed.
+            **${{ steps.pack.outputs.portable_zip }}** — Self-contained, no .NET required. Unzip and run `PowerDimmer\PowerDimmer.exe`.
+            **${{ steps.pack.outputs.light_zip }}** — Smaller download, requires [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0).
+
+            Both archives contain a single `PowerDimmer\` folder. To upgrade, close the app and unzip over the existing folder — `settings.json` lives in that folder but is not part of the archive, so your settings survive.
 
             Version is shown in the About window (tray menu → 设置 → 关于 PowerDimmer) and in the exe's Properties → Details page.
           files: |
-            PowerDimmer-portable.zip
-            PowerDimmer-requires-dotnet8.zip
+            ${{ steps.pack.outputs.portable_zip }}
+            ${{ steps.pack.outputs.light_zip }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

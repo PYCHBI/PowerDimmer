@@ -25,22 +25,24 @@
 
 ## 下载
 
-到 [Releases](https://github.com/PYCHBI/PowerDimmer/releases) 下载：
+到 [Releases](https://github.com/PYCHBI/PowerDimmer/releases) 下载（包名里的版本号随发布变化）：
 
-- `PowerDimmer-portable.zip` — 自包含，不需要装 .NET，解压即用（推荐）
-- `PowerDimmer-requires-dotnet8.zip` — 体积小，需要装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
+- `PowerDimmer_<版本>_x64-portable.zip` — 自包含，不需要装 .NET（推荐）
+- `PowerDimmer_<版本>_x64-requires-dotnet8.zip` — 体积小，需要装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
 
-每次 push 到 `main` 会自动构建并更新 release；版本号取自 csproj，改版本只改这一处。
+两个包解开后都只有一个 `PowerDimmer` 文件夹（**文件夹名不带版本号**），程序在里面。每次 push 到 `main` 会自动构建并更新 release；版本号取自 csproj，改版本只改这一处。
 
 ## 升级（便携版怎么换新版本）
 
-直接解压新包、覆盖到旧目录即可，**配置不会丢**。原因有三条：
+1. 先**退出 PowerDimmer**（托盘图标 → 退出）；程序还开着时 exe 被占用，覆盖会失败或只覆盖一半。
+2. 解压新包，得到 `PowerDimmer` 文件夹。
+3. 把它覆盖到旧文件夹所在的位置，选择"替换目标中的文件"。
 
-1. 发布包由 CI 从干净检出构建，`dotnet publish` 的输出只有程序文件（exe / dll / deps.json / runtimeconfig.json / pdb），**包里从来没有 `settings.json`**。构建流程里还有一步校验，一旦发现 `settings.json` 或 `crash.log` 混进包就直接让构建失败。
-2. `settings.json` 是**运行时才生成**的：程序第一次启动、且真的要写入用户设置时才会在 exe 同目录创建它。装完没运行过就不会有这个文件。
-3. 它是"同目录追加"，不在发布包的覆盖名单里 —— 覆盖只会改到程序文件，碰不到它。如果你的 exe 所在目录不可写、配置自动回退到了 `%APPDATA%\PowerDimmer\`，那就更不可能被覆盖。
+配置不会丢：`settings.json` 是程序**运行时**才生成的，不参与打包，所以压缩包里根本没有这个文件；覆盖只会替换 exe / dll / deps.json 这类程序文件，你原有的 `settings.json` 原地留着。
 
-保险起见也可以覆盖前把 `settings.json` 复制一份出去，出问题再拷回来。
+文件夹名刻意不带版本号，就是为了这件事——带版本号的话新版本会解压成 `PowerDimmer_1.1.1`，和旧目录并排存在，你还得手动把 `settings.json` 搬过去。
+
+顺带说明：如果你的程序目录不可写、配置自动回退到了 `%APPDATA%\PowerDimmer\`，那更不会被覆盖。保险起见也可以覆盖前先把 `settings.json` 复制一份出去。
 
 ## 便携版构建
 
