@@ -251,6 +251,37 @@ jobs:
             ref: "fe26c41d0103906cbfc4d2c62d2e5b115eeb6520"
 
     steps:
+      # Runs before the checkout, so the token is as fresh as it gets. Two calls:
+      # one ref at the current commit, one at the old commit this job builds.
+      # Their status codes tell "bad token" apart from "bad target commit".
+      - name: diag token before checkout
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          OLD_SHA: ${{ matrix.ref }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          $sha = [System.Security.Cryptography.SHA256]::Create()
+          $hex = ((($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($env:GH_TOKEN))) |
+            ForEach-Object { $_.ToString("x2") }) -join "").Substring(0, 12)
+          Write-Host "::warning::diag2 marker len=$($env:GH_TOKEN.Length) sha256=$hex"
+          Write-Host "::warning::diag2 head=$($env:HEAD_SHA) old=$($env:OLD_SHA) ver=$($env:VERSION)"
+          $h = @{ Authorization = "Bearer $($env:GH_TOKEN)"; Accept = "application/vnd.github+json" }
+          $api = "https://api.github.com/repos/${{ github.repository }}/git/refs"
+          foreach ($c in @(
+            @("A-now", $env:HEAD_SHA, "refs/tags/diagA-$($env:VERSION)-$($env:GITHUB_RUN_ID)"),
+            @("B-old", $env:OLD_SHA,  "refs/tags/diagB-$($env:VERSION)-$($env:GITHUB_RUN_ID)")
+          )) {
+            $body = @{ ref = $c[2]; sha = $c[1] } | ConvertTo-Json
+            try {
+              Invoke-RestMethod -Method Post -Headers $h -Body $body -ContentType "application/json" -Uri $api | Out-Null
+              Write-Host "::warning::diag2 $($c[0]) 201 ok"
+            } catch {
+              Write-Host "::warning::diag2 $($c[0]) HTTP $([int]$_.Exception.Response.StatusCode)"
+            }
+          }
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ matrix.ref }}
