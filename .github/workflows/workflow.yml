@@ -2,15 +2,20 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      build_ref:
+        description: "要构建的 commit / tag（留空 = 触发时的分支 head）"
+        required: false
+        default: ""
   push:
     branches:
       - main
     paths-ignore:
       - "**.md"
+      - ".github/workflows/backfill.yml"
 
 # The default token is read-only on new repositories, and publishing a release
-# needs write access to repository contents. Without this the old
-# "update-tag" step failed with 403 and the release step was skipped.
+# needs write access to repository contents.
 permissions:
   contents: write
 
@@ -19,20 +24,75 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # workflow_dispatch with build_ref rebuilds an older commit using the
+          # current workflow - used to backfill releases for versions that were
+          # published before releases became one-per-version.
+          ref: ${{ inputs.build_ref || github.ref }}
+
+      # Backfilling an old version checks out a commit that predates CHANGELOG.md,
+      # so the notes are read from the default branch instead of the checked-out tree.
+      - name: Fetch CHANGELOG from the default branch
+        if: ${{ inputs.build_ref != '' }}
+        shell: pwsh
+        run: |
+          $url = "https://raw.githubusercontent.com/${{ github.repository }}/main/CHANGELOG.md"
+          Invoke-RestMethod -Uri $url -OutFile CHANGELOG.md
+          Write-Host "fetched CHANGELOG.md ($((Get-Item CHANGELOG.md).Length) bytes)"
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
 
-      - name: Read version from csproj
+      - name: Read version and target commit
         id: ver
         shell: pwsh
         run: |
           [xml]$proj = Get-Content PowerDimmer.csproj
           $v = ($proj.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
-          if (-not $v) { $v = "0.0.0" }
+          if (-not $v) { throw "PowerDimmer.csproj has no <Version>; refusing to publish an unversioned build." }
+          $sha = (git rev-parse HEAD).Trim()
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "version = $v"
+          "tag=v$v"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "sha=$sha"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "version=$v tag=v$v sha=$sha"
+
+      # One release per version, so a version that has already been published can
+      # never be silently overwritten with different code: rebuilding the same
+      # commit is fine (assets get refreshed), rebuilding different code under an
+      # unchanged version number is an error.
+      - name: Guard against reusing a published version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          SHA: ${{ steps.ver.outputs.sha }}
+        run: |
+          $headers = @{
+            Authorization          = "Bearer $env:GH_TOKEN"
+            Accept                 = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          try {
+            $ref = Invoke-RestMethod -Headers $headers `
+              -Uri "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/$env:TAG"
+          } catch {
+            if ([int]$_.Exception.Response.StatusCode -eq 404) {
+              Write-Host "tag $env:TAG does not exist yet; it will be created at $env:SHA"
+              exit 0
+            }
+            throw
+          }
+
+          $published = $ref.object.sha
+          if ($ref.object.type -eq "tag") {
+            $tagObject = Invoke-RestMethod -Headers $headers -Uri $ref.object.url
+            $published = $tagObject.object.sha
+          }
+          Write-Host "tag $env:TAG already exists at $published"
+          if ($published -ne $env:SHA) {
+            throw "$env:TAG is already published from $published, but this build is $env:SHA. Bump <Version> in PowerDimmer.csproj; a published version must not be rewritten."
+          }
 
       # Package layout (deliberately mirrors what most portable Windows apps ship):
       #
@@ -97,46 +157,51 @@ jobs:
           "portable_zip=$portable" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "light_zip=$light" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      # Release notes live in CHANGELOG.md under "## [<version>]"; the section is
+      # copied verbatim so the repo and the Releases page never drift apart.
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          if (-not (Test-Path CHANGELOG.md)) {
+            throw "CHANGELOG.md is missing; every release needs a changelog entry."
+          }
+          $text = Get-Content CHANGELOG.md -Raw
+          $pattern = "(?ms)^##\s+\[?v?$([regex]::Escape($env:VERSION))\]?[^\r\n]*\r?\n(.*?)(?=^##\s|\z)"
+          $m = [regex]::Match($text, $pattern)
+          if ($m.Success) {
+            $notes = $m.Groups[1].Value.Trim()
+          } else {
+            throw "CHANGELOG.md has no '## [$env:VERSION]' section. Add one before releasing."
+          }
+          "notes<<CHANGELOG_EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $notes | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "CHANGELOG_EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host $notes
+
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: Latest Build (v${{ steps.ver.outputs.version }})
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ steps.ver.outputs.sha }}
+          # Backfilling an old version through workflow_dispatch must not steal the
+          # "Latest" badge from the newest release.
+          make_latest: ${{ github.event_name == 'push' && 'true' || 'false' }}
           body: |
-            **${{ steps.pack.outputs.portable_zip }}** — Self-contained, no .NET required. Unzip and run `PowerDimmer\PowerDimmer.exe`.
-            **${{ steps.pack.outputs.light_zip }}** — Smaller download, requires [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0).
+            ${{ steps.notes.outputs.notes }}
 
-            Both archives contain a single `PowerDimmer\` folder. To upgrade, close the app and unzip over the existing folder — `settings.json` lives in that folder but is not part of the archive, so your settings survive.
+            ---
 
-            Version is shown in the About window (tray menu → 设置 → 关于 PowerDimmer) and in the exe's Properties → Details page.
+            **${{ steps.pack.outputs.portable_zip }}** — 自包含，不需要装 .NET。解压后运行 `PowerDimmer\PowerDimmer.exe`。
+            **${{ steps.pack.outputs.light_zip }}** — 体积小，需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)。
+
+            两个包解开后都只有一个 `PowerDimmer` 文件夹（名字不带版本号）。升级时先退出程序，再把新包解压覆盖旧文件夹 —— `settings.json` 不参与打包，配置会保留。
+
+            版本号显示在托盘菜单 `设置 → 关于 PowerDimmer`，以及 exe 的「属性 → 详细信息」页。
           files: |
             ${{ steps.pack.outputs.portable_zip }}
             ${{ steps.pack.outputs.light_zip }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # "latest" is a single rolling release, so assets from previous runs stay behind.
-      # They pile up (and people download the stale one), so prune everything that is
-      # not part of this build.
-      - name: Prune stale assets from the rolling release
-        if: success()
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KEEP: "${{ steps.pack.outputs.portable_zip }},${{ steps.pack.outputs.light_zip }}"
-        run: |
-          $keep = $env:KEEP.Split(",")
-          $headers = @{
-            Authorization          = "Bearer $env:GH_TOKEN"
-            Accept                 = "application/vnd.github+json"
-            "X-GitHub-Api-Version" = "2022-11-28"
-          }
-          $release = Invoke-RestMethod -Headers $headers `
-            -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/latest"
-
-          foreach ($asset in $release.assets) {
-            if ($keep -notcontains $asset.name) {
-              Write-Host "removing stale asset: $($asset.name)"
-              Invoke-RestMethod -Method Delete -Headers $headers -Uri $asset.url | Out-Null
-            }
-          }
-          Write-Host "assets now: $((Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/latest").assets.name -join ', ')"
