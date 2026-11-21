@@ -251,37 +251,6 @@ jobs:
             ref: "fe26c41d0103906cbfc4d2c62d2e5b115eeb6520"
 
     steps:
-      # Runs before the checkout, so the token is as fresh as it gets. Two calls:
-      # one ref at the current commit, one at the old commit this job builds.
-      # Their status codes tell "bad token" apart from "bad target commit".
-      - name: diag token before checkout
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.sha }}
-          OLD_SHA: ${{ matrix.ref }}
-          VERSION: ${{ matrix.version }}
-        run: |
-          $sha = [System.Security.Cryptography.SHA256]::Create()
-          $hex = ((($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($env:GH_TOKEN))) |
-            ForEach-Object { $_.ToString("x2") }) -join "").Substring(0, 12)
-          Write-Host "::warning::diag2 marker len=$($env:GH_TOKEN.Length) sha256=$hex"
-          Write-Host "::warning::diag2 head=$($env:HEAD_SHA) old=$($env:OLD_SHA) ver=$($env:VERSION)"
-          $h = @{ Authorization = "Bearer $($env:GH_TOKEN)"; Accept = "application/vnd.github+json" }
-          $api = "https://api.github.com/repos/${{ github.repository }}/git/refs"
-          foreach ($c in @(
-            @("A-now", $env:HEAD_SHA, "refs/tags/diagA-$($env:VERSION)-$($env:GITHUB_RUN_ID)"),
-            @("B-old", $env:OLD_SHA,  "refs/tags/diagB-$($env:VERSION)-$($env:GITHUB_RUN_ID)")
-          )) {
-            $body = @{ ref = $c[2]; sha = $c[1] } | ConvertTo-Json
-            try {
-              Invoke-RestMethod -Method Post -Headers $h -Body $body -ContentType "application/json" -Uri $api | Out-Null
-              Write-Host "::warning::diag2 $($c[0]) 201 ok"
-            } catch {
-              Write-Host "::warning::diag2 $($c[0]) HTTP $([int]$_.Exception.Response.StatusCode)"
-            }
-          }
-
       - uses: actions/checkout@v4
         with:
           ref: ${{ matrix.ref }}
@@ -377,31 +346,20 @@ jobs:
             "X-GitHub-Api-Version" = "2022-11-28"
           }
 
-          Write-Host "::warning::diag $tag token length=$($env:GH_TOKEN.Length)"
-          try {
-            $info = Invoke-RestMethod -Headers $headers -Uri $api
-            Write-Host "::warning::diag $tag repo permissions=$($info.permissions | ConvertTo-Json -Compress)"
-          } catch {
-            Write-Host "::warning::diag $tag GET repos HTTP $([int]$_.Exception.Response.StatusCode)"
-          }
-
-          # Create the tag up front so the release hangs off an exact commit
-          # instead of whatever the branch head happens to be.
+          # The tag has to exist before this job runs: creating a ref that points at
+          # an old commit is refused for the workflow token (403), while a ref at the
+          # commit the run started from is accepted. So the tags are pushed from a
+          # normal git client once, and this job only builds the release on top.
+          $exists = $true
           try {
             Invoke-RestMethod -Headers $headers -Uri "$api/git/ref/tags/$tag" | Out-Null
-            Write-Host "tag $tag already exists"
           } catch {
-            if ([int]$_.Exception.Response.StatusCode -eq 404) {
-              $payload = @{ ref = "refs/tags/$tag"; sha = $env:REF } | ConvertTo-Json
-              try {
-                Invoke-RestMethod -Method Post -Headers $headers -Body $payload `
-                  -ContentType "application/json" -Uri "$api/git/refs" | Out-Null
-                Write-Host "tag $tag created at $env:REF"
-              } catch {
-                Write-Host "::warning::diag $tag POST git/refs HTTP $([int]$_.Exception.Response.StatusCode) body=[$($_.ErrorDetails.Message)]"
-              }
-            }
+            if ([int]$_.Exception.Response.StatusCode -eq 404) { $exists = $false }
           }
+          if (-not $exists) {
+            throw "tag $tag is missing. Push it first: git tag $tag $($env:REF); git push origin $tag"
+          }
+          Write-Host "tag $tag exists"
 
           $text = Get-Content CHANGELOG.md -Raw
           $pattern = "(?ms)^##\s+\[?v?$([regex]::Escape($env:VERSION))\]?[^\r\n]*\r?\n(.*?)(?=^##\s|\z)"
@@ -427,13 +385,13 @@ jobs:
           $body | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "BODY_EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      # Same action the normal release path uses; it is the one proven to hold
-      # write access in this workflow.
+      # Same action and same explicit token env as the normal release path. The tag
+      # already points at the commit being built, so target_commitish is left out:
+      # passing an old commit there is what made the API refuse the request.
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.notes.outputs.tag }}
           name: ${{ steps.notes.outputs.tag }}
-          target_commitish: ${{ matrix.ref }}
           body: ${{ steps.notes.outputs.body }}
           files: |
             ${{ steps.pack.outputs.portable_zip }}
@@ -442,4 +400,6 @@ jobs:
           prerelease: false
           # A backfilled version must never take the "Latest" badge.
           make_latest: "false"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
