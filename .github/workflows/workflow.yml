@@ -329,7 +329,7 @@ jobs:
         id: notes
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ matrix.version }}
           REF: ${{ matrix.ref }}
           PORTABLE: ${{ steps.pack.outputs.portable_zip }}
@@ -411,3 +411,41 @@ jobs:
           prerelease: false
           # A backfilled version must never take the "Latest" badge.
           make_latest: "false"
+
+  # Temporary comparison: the build job's token can write, the backfill job's
+  # cannot, in the same run of the same file. This prints a hash of both token
+  # expressions and asks the API what each one can do, so the difference is
+  # visible instead of guessed. Remove once the publish path works.
+  probe:
+    if: ${{ contains(github.event.head_commit.message || '', '[probe]') }}
+    runs-on: windows-latest
+    steps:
+      - name: Compare github.token with secrets.GITHUB_TOKEN
+        shell: pwsh
+        env:
+          T_GITHUB: ${{ github.token }}
+          T_SECRET: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          function Fingerprint([string]$s) {
+            if (-not $s) { return "empty" }
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $h = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($s))
+            $hex = (($h | ForEach-Object { $_.ToString("x2") }) -join "")
+            return "len=$($s.Length) sha256=$($hex.Substring(0, 12))"
+          }
+
+          Write-Host "::warning::probe github.token         $(Fingerprint $env:T_GITHUB)"
+          Write-Host "::warning::probe secrets.GITHUB_TOKEN  $(Fingerprint $env:T_SECRET)"
+
+          foreach ($p in @(@("github.token", $env:T_GITHUB), @("secrets.GITHUB_TOKEN", $env:T_SECRET))) {
+            $label = $p[0]; $tok = $p[1]
+            try {
+              $r = Invoke-RestMethod -Headers @{
+                Authorization = "Bearer $tok"; Accept = "application/vnd.github+json"
+              } -Uri "https://api.github.com/repos/${{ github.repository }}"
+              $perm = $r.permissions | ConvertTo-Json -Compress
+              Write-Host "::warning::probe [$label] GET repos 200 perms=$perm"
+            } catch {
+              Write-Host "::warning::probe [$label] GET repos HTTP $([int]$_.Exception.Response.StatusCode)"
+            }
+          }
