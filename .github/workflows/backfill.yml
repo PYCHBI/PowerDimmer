@@ -116,40 +116,124 @@ jobs:
           "portable_zip=$portable" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "light_zip=$light" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Extract release notes from CHANGELOG.md
-        id: notes
+      # The tag is created first, explicitly, and the release is then created
+      # against an existing tag. Letting the release API create the tag itself
+      # (via target_commitish) returned 403 "Resource not accessible by
+      # integration" for every backfilled version.
+      - name: Publish release via REST API
         shell: pwsh
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ matrix.version }}
+          REF: ${{ matrix.ref }}
+          PORTABLE: ${{ steps.pack.outputs.portable_zip }}
+          LIGHT: ${{ steps.pack.outputs.light_zip }}
         run: |
+          $ErrorActionPreference = "Stop"
+
+          $repo = "${{ github.repository }}"
+          $tag = "v$($env:VERSION)"
+          $api = "https://api.github.com/repos/$repo"
+          $headers = @{
+            Authorization          = "Bearer $env:GH_TOKEN"
+            Accept                 = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          function Fail-Call($context, $err) {
+            $code = 0
+            try { $code = [int]$err.Exception.Response.StatusCode } catch { }
+            Write-Host "::error::$context failed (HTTP $code): $($err.ErrorDetails.Message)"
+            throw "$context failed (HTTP $code)"
+          }
+
+          # --- release notes, straight from CHANGELOG.md -------------------------
           $text = Get-Content CHANGELOG.md -Raw
           $pattern = "(?ms)^##\s+\[?v?$([regex]::Escape($env:VERSION))\]?[^\r\n]*\r?\n(.*?)(?=^##\s|\z)"
           $m = [regex]::Match($text, $pattern)
-          if (-not $m.Success) { throw "CHANGELOG.md has no '## [$env:VERSION]' section." }
-          $notes = $m.Groups[1].Value.Trim()
-          "notes<<CHANGELOG_EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          $notes | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "CHANGELOG_EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if (-not $m.Success) { throw "CHANGELOG.md has no '## [$($env:VERSION)]' section" }
+          $notes = (($m.Groups[1].Value.Trim() -replace '(?m)^\s*---\s*$', '') -split "`r?`n" | ForEach-Object { $_.TrimEnd() }) -join "`n"
+          $notes = $notes.Trim()
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ matrix.version }}
-          name: v${{ matrix.version }}
-          target_commitish: ${{ matrix.ref }}
-          # A backfilled release must never take the "Latest" badge away from the
-          # newest version.
-          make_latest: "false"
-          body: |
-            > 本版本为补建发布：当时按滚动方式发布，包已被覆盖；这里从对应提交 `${{ matrix.ref }}` 重新构建。
+          $short = $env:REF.Substring(0, 7)
+          $body = @(
+            ('> 本版本为补建发布：当时按滚动方式发布，包已被覆盖；这里从对应提交 `' + $short + '` 重新构建。')
+            ''
+            $notes
+            ''
+            '---'
+            ''
+            ('**' + $env:PORTABLE + '** — 自包含，不需要装 .NET。解压后运行 `PowerDimmer\PowerDimmer.exe`。')
+            ('**' + $env:LIGHT + '** — 体积小，需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)。')
+          ) -join "`n"
 
-            ${{ steps.notes.outputs.notes }}
+          # --- tag ---------------------------------------------------------------
+          $tagExists = $false
+          try {
+            $existingTag = Invoke-RestMethod -Headers $headers -Uri "$api/git/ref/tags/$tag"
+            $tagExists = $true
+            Write-Host "tag $tag already exists at $($existingTag.object.sha)"
+          } catch {
+            if ([int]$_.Exception.Response.StatusCode -ne 404) { Fail-Call "GET tag $tag" $_ }
+          }
+          if (-not $tagExists) {
+            $payload = @{ ref = "refs/tags/$tag"; sha = $env:REF } | ConvertTo-Json
+            try {
+              Invoke-RestMethod -Method Post -Headers $headers -Body $payload `
+                -ContentType "application/json" -Uri "$api/git/refs" | Out-Null
+              Write-Host "tag $tag created at $env:REF"
+            } catch { Fail-Call "POST tag $tag" $_ }
+          }
 
-            ---
+          # --- release -----------------------------------------------------------
+          $release = $null
+          try {
+            $found = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag"
+            $patch = @{ name = $tag; body = $body } | ConvertTo-Json
+            $release = Invoke-RestMethod -Method Patch -Headers $headers -Body $patch `
+              -ContentType "application/json" -Uri "$api/releases/$($found.id)"
+            Write-Host "release $tag updated (#$($release.id))"
+          } catch {
+            if ([int]$_.Exception.Response.StatusCode -ne 404) { Fail-Call "GET release $tag" $_ }
+            $post = @{
+              tag_name   = $tag
+              name       = $tag
+              body       = $body
+              draft      = $false
+              prerelease = $false
+              # Never let a backfilled version take the "Latest" badge.
+              make_latest = 'false'
+            } | ConvertTo-Json
+            try {
+              $release = Invoke-RestMethod -Method Post -Headers $headers -Body $post `
+                -ContentType "application/json" -Uri "$api/releases"
+              Write-Host "release $tag created (#$($release.id))"
+            } catch { Fail-Call "POST release $tag" $_ }
+          }
 
-            **${{ steps.pack.outputs.portable_zip }}** — 自包含，不需要装 .NET。解压后运行 `PowerDimmer\PowerDimmer.exe`。
-            **${{ steps.pack.outputs.light_zip }}** — 体积小，需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)。
-          files: |
-            ${{ steps.pack.outputs.portable_zip }}
-            ${{ steps.pack.outputs.light_zip }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- assets ------------------------------------------------------------
+          $uploadBase = $release.upload_url -replace '\{\?name,label\}', ''
+          $existingAssets = (Invoke-RestMethod -Headers $headers -Uri "$api/releases/$($release.id)/assets").assets
+
+          foreach ($file in @($env:PORTABLE, $env:LIGHT)) {
+            if (-not (Test-Path $file)) { throw "missing package: $file" }
+            $name = Split-Path $file -Leaf
+
+            $dup = $existingAssets | Where-Object { $_.name -eq $name }
+            if ($dup) {
+              Write-Host "replacing existing asset $name"
+              Invoke-RestMethod -Method Delete -Headers $headers -Uri $dup.url | Out-Null
+            }
+
+            $upHeaders = @{
+              Authorization  = "Bearer $env:GH_TOKEN"
+              "Content-Type" = "application/octet-stream"
+            }
+            try {
+              Invoke-RestMethod -Method Post -Headers $upHeaders -InFile $file `
+                -Uri "$uploadBase`?name=$name" | Out-Null
+              Write-Host "uploaded $name ($([math]::Round((Get-Item $file).Length / 1MB, 1)) MB)"
+            } catch { Fail-Call "upload $name" $_ }
+          }
+
+          Write-Host "done: https://github.com/$repo/releases/tag/$tag"
