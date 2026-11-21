@@ -20,6 +20,11 @@ permissions:
 jobs:
   backfill:
     runs-on: windows-latest
+    # Restated at job level on purpose: with only the workflow-level block,
+    # both POST /git/refs and POST /releases came back 403 with an empty body,
+    # while the main workflow (same declaration) could write.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -157,8 +162,10 @@ jobs:
 
           # --- what can this token actually do? ----------------------------------
           $repoInfo = Invoke-RestMethod -Headers $headers -Uri $api
-          Write-Host "repo permissions: $($repoInfo.permissions | ConvertTo-Json -Compress)"
-          Write-Host "default_branch: $($repoInfo.default_branch)"
+          $perm = $repoInfo.permissions | ConvertTo-Json -Compress
+          $tokLen = 0
+          if ($env:GH_TOKEN) { $tokLen = $env:GH_TOKEN.Length }
+          Write-Host "::warning::token length=$tokLen repo permissions=$perm"
 
           # --- tag ---------------------------------------------------------------
           $tagExists = $false
