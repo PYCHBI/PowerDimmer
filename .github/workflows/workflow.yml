@@ -412,40 +412,88 @@ jobs:
           # A backfilled version must never take the "Latest" badge.
           make_latest: "false"
 
-  # Temporary comparison: the build job's token can write, the backfill job's
-  # cannot, in the same run of the same file. This prints a hash of both token
-  # expressions and asks the API what each one can do, so the difference is
-  # visible instead of guessed. Remove once the publish path works.
-  probe:
+
+  # Temporary diagnosis. The same commit, the same token, three different
+  # execution environments: which one can actually write? Remove once the
+  # publish path works.
+  probe-linux:
+    if: ${{ contains(github.event.head_commit.message || '', '[probe]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: token / proxy / write
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          echo "linux proxy: HTTPS_PROXY=${HTTPS_PROXY:-none} HTTP_PROXY=${HTTP_PROXY:-none}"
+          echo "token length ${#GH_TOKEN}"
+          code=$(curl -sS -o r.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO")
+          perms=$(tr -d ' \n' < r.json | grep -o '"permissions":{[^}]*}' || echo '(no key)')
+          echo "GET /repos -> $code $perms"
+          echo "::warning::probe-linux GET $code $perms"
+          TAG="probe-linux-$(date +%s)"
+          code=$(curl -sS -o p.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -d "{\"ref\":\"refs/tags/$TAG\",\"sha\":\"$SHA\"}" \
+            "https://api.github.com/repos/$REPO/git/refs")
+          echo "POST /git/refs -> $code $(tr -d '\n' < p.json | cut -c1-160)"
+          echo "::warning::probe-linux POST $code $(tr -d '\n' < p.json | cut -c1-160)"
+          if [ "$code" = "201" ]; then
+            curl -sS -o /dev/null -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/git/refs/tags/$TAG" && echo "cleaned up"
+          fi
+
+  probe-win:
     if: ${{ contains(github.event.head_commit.message || '', '[probe]') }}
     runs-on: windows-latest
     steps:
-      - name: Compare github.token with secrets.GITHUB_TOKEN
+      - name: token / proxy / write through git-bash curl
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          echo "windows proxy: HTTPS_PROXY=${HTTPS_PROXY:-none} HTTP_PROXY=${HTTP_PROXY:-none}"
+          echo "token length ${#GH_TOKEN}"
+          code=$(curl -sS -o r.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO")
+          perms=$(tr -d ' \n' < r.json | grep -o '"permissions":{[^}]*}' || echo '(no key)')
+          echo "GET /repos -> $code $perms"
+          echo "::warning::probe-win GET $code $perms"
+          TAG="probe-win-$(date +%s)"
+          code=$(curl -sS -o p.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -d "{\"ref\":\"refs/tags/$TAG\",\"sha\":\"$SHA\"}" \
+            "https://api.github.com/repos/$REPO/git/refs")
+          echo "POST /git/refs -> $code $(tr -d '\n' < p.json | cut -c1-160)"
+          echo "::warning::probe-win POST $code $(tr -d '\n' < p.json | cut -c1-160)"
+          if [ "$code" = "201" ]; then
+            curl -sS -o /dev/null -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/git/refs/tags/$TAG" && echo "cleaned up"
+          fi
+
+      - name: same call through PowerShell Invoke-RestMethod
         shell: pwsh
         env:
-          T_GITHUB: ${{ github.token }}
-          T_SECRET: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
-          function Fingerprint([string]$s) {
-            if (-not $s) { return "empty" }
-            $sha = [System.Security.Cryptography.SHA256]::Create()
-            $h = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($s))
-            $hex = (($h | ForEach-Object { $_.ToString("x2") }) -join "")
-            return "len=$($s.Length) sha256=$($hex.Substring(0, 12))"
-          }
-
-          Write-Host "::warning::probe github.token         $(Fingerprint $env:T_GITHUB)"
-          Write-Host "::warning::probe secrets.GITHUB_TOKEN  $(Fingerprint $env:T_SECRET)"
-
-          foreach ($p in @(@("github.token", $env:T_GITHUB), @("secrets.GITHUB_TOKEN", $env:T_SECRET))) {
-            $label = $p[0]; $tok = $p[1]
-            try {
-              $r = Invoke-RestMethod -Headers @{
-                Authorization = "Bearer $tok"; Accept = "application/vnd.github+json"
-              } -Uri "https://api.github.com/repos/${{ github.repository }}"
-              $perm = $r.permissions | ConvertTo-Json -Compress
-              Write-Host "::warning::probe [$label] GET repos 200 perms=$perm"
-            } catch {
-              Write-Host "::warning::probe [$label] GET repos HTTP $([int]$_.Exception.Response.StatusCode)"
-            }
+          $tag = "probe-irm-$(Get-Date -Format s)" -replace '[:]', '-'
+          $body = @{ ref = "refs/tags/$tag"; sha = $env:SHA } | ConvertTo-Json
+          try {
+            $r = Invoke-RestMethod -Method Post -ContentType "application/json" -Body $body `
+              -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" } `
+              -Uri "https://api.github.com/repos/$env:REPO/git/refs"
+            Write-Host "::warning::probe-win IRM POST 201 ref=$($r.ref)"
+          } catch {
+            $code = [int]$_.Exception.Response.StatusCode
+            $msg  = $_.ErrorDetails.Message
+            Write-Host "::warning::probe-win IRM POST $code body=[$msg]"
           }
