@@ -7,6 +7,11 @@ on:
         description: "要构建的 commit / tag（留空 = 触发时的分支 head）"
         required: false
         default: ""
+      backfill:
+        description: "同时补建 1.1.0-1.5.0 的历史 release"
+        type: boolean
+        required: false
+        default: false
   push:
     branches:
       - main
@@ -217,7 +222,11 @@ jobs:
   # got a token with every permission false (even `pull`), so POST /git/refs and
   # POST /releases both returned 403 - while this file's token can write fine.
   backfill:
-    if: contains(github.event.head_commit.message, '[backfill]')
+    # Two ways in: a commit message containing [backfill], or ticking the
+    # "backfill" box when running this workflow manually from the Actions page.
+    # An empty commit would not do: path filters ignore commits with no file
+    # changes, so nothing would start at all.
+    if: ${{ inputs.backfill == true || contains(github.event.head_commit.message || '', '[backfill]') }}
     runs-on: windows-latest
     permissions:
       contents: write
