@@ -804,34 +804,30 @@ namespace PowerDimmer
             CancelFade();
 
             // Windows 11 draws a translucent 1-DIP frame border around every window, and
-            // those pixels are not painted by the window itself: the mask underneath shows
-            // through them. An overlay laid on the window would dim that stroke a second
-            // time, so while the fade runs the window's outline turns into a hairline that
-            // is darker than the row right outside it - and snaps back when the mask takes
-            // over. Inset the overlay by exactly the border thickness, so its edge lands
-            // where the painted pixels start and no pixel is covered twice.
+            // those pixels are a window onto the mask underneath: dimming them a second
+            // time with this overlay is what produced the hairline along the edges while
+            // the fade ran. The overlay therefore keeps the window's exact bounds (so the
+            // corner arcs stay covered - leaving them out turns the rounded frame into a
+            // white crescent) and only its straight edges are pulled in by the stroke
+            // width, which is where the double darkening happened.
             var radiusDip = GetWindowCornerRadiusDip(leaving);
-            var inset = Win32.GetVisibleBorderThicknessPx(leaving);
-            if (inset > 0 && bounds.Width > inset * 4 && bounds.Height > inset * 4)
+            var insetPx = Win32.GetVisibleBorderThicknessPx(leaving);
+            var dpi = Win32.GetDpiForWindow(leaving);
+            if (dpi == 0)
             {
-                bounds = new System.Drawing.Rectangle(bounds.Left + inset, bounds.Top + inset,
-                    bounds.Width - inset * 2, bounds.Height - inset * 2);
+                dpi = 96;
+            }
 
-                // The corner arc lives on the inset rectangle now, so its radius shrinks
-                // with it; otherwise the clip would cut into the window at each corner.
-                var dpi = Win32.GetDpiForWindow(leaving);
-                if (dpi == 0)
-                {
-                    dpi = 96;
-                }
-
-                var radiusPx = Math.Max(0, (int)Math.Round(radiusDip * dpi / 96.0) - inset);
-                radiusDip = radiusPx * 96.0 / dpi;
+            var insetDip = insetPx * 96.0 / dpi;
+            if (bounds.Width <= insetPx * 4 || bounds.Height <= insetPx * 4)
+            {
+                insetDip = 0;
             }
 
             var overlay = new DimWindow(settings, bounds, maskBrush)
             {
-                CornerRadiusDip = radiusDip
+                CornerRadiusDip = radiusDip,
+                EdgeInsetDip = insetDip
             };
             overlay.SetSurfaceOpacity(0);
             overlay.Show();

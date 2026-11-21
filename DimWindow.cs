@@ -57,6 +57,23 @@ namespace PowerDimmer
         public double CornerRadiusDip { get; set; }
 
         /// <summary>
+        /// Width, in DIPs, of the band along the straight edges that this mask must leave
+        /// alone; 0 for "cover the whole rounded rectangle".
+        ///
+        /// Windows 11 paints a translucent frame stroke around every window, and those
+        /// pixels are a window onto the mask underneath: dimming them again with this
+        /// overlay double-darkens them, which is the hairline seen along the edges while
+        /// the fade runs. So the straight edges are pulled in by the stroke width.
+        ///
+        /// The corners are the opposite case: the arc there is the window's own opaque
+        /// frame, and leaving it uncovered keeps it at full brightness - a thin white
+        /// crescent hugging the corner. That is worse and much more visible, so the arc
+        /// stays fully covered: the clip is the window's rounded rectangle intersected
+        /// with a rectangle inset by this amount, which pulls in the straight edges only.
+        /// </summary>
+        public double EdgeInsetDip { get; set; }
+
+        /// <summary>
         /// Puts a soft hole in the mask centred on the given screen position (physical
         /// pixels). The radius is in DIPs so it keeps a constant visual size on every
         /// monitor, whatever the scaling is.
@@ -183,21 +200,38 @@ namespace PowerDimmer
         /// </summary>
         private void ApplyCornerClip()
         {
-            if (CornerRadiusDip <= 0)
+            var width = ActualWidth;
+            var height = ActualHeight;
+            if (width <= 0 || height <= 0)
             {
                 _surface.Clip = null;
                 return;
             }
 
-            var width = ActualWidth;
-            var height = ActualHeight;
-            if (width <= 0 || height <= 0)
+            var inset = Math.Max(0, EdgeInsetDip);
+
+            // Nothing to shape: no round corners and no edge band to skip.
+            if (CornerRadiusDip <= 0 && inset <= 0)
             {
+                _surface.Clip = null;
                 return;
             }
 
-            _surface.Clip = new RectangleGeometry(
+            var full = new RectangleGeometry(
                 new Rect(0, 0, width, height), CornerRadiusDip, CornerRadiusDip);
+
+            if (inset <= 0 || width <= inset * 2 || height <= inset * 2)
+            {
+                _surface.Clip = full;
+                return;
+            }
+
+            // Intersecting keeps the arcs at their full radius (so the corners stay
+            // covered) while the square inset pulls the four straight edges inwards.
+            var inner = new RectangleGeometry(
+                new Rect(inset, inset, width - inset * 2, height - inset * 2));
+
+            _surface.Clip = Geometry.Combine(full, inner, GeometryCombineMode.Intersect, null);
         }
     }
 }
