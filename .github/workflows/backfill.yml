@@ -1,17 +1,15 @@
 name: Backfill historical releases
 
-# One-off: versions published before releases became one-per-version only ever
-# existed as assets on the rolling "latest" release, so their packages were
-# pruned away. This rebuilds each of them from its own commit and publishes it
-# as v<version>, so the Releases page keeps a complete, downloadable history.
+# DEPRECATED - the backfill now runs as the `backfill` job inside workflow.yml.
 #
-# Keep this file for future use - it is excluded from the main workflow's push
-# trigger, so editing it never restarts a release build.
+# Kept only for reference. It is left on manual dispatch, and it does not work
+# as-is: a separate workflow file here received a GITHUB_TOKEN with every
+# permission false (even `pull`), so POST /git/refs and POST /releases returned
+# 403. The same code inside workflow.yml has a usable token.
+#
+# The main workflow ignores this path on push, so editing it never starts a build.
 
 on:
-  push:
-    paths:
-      - ".github/workflows/backfill.yml"
   workflow_dispatch:
 
 permissions:

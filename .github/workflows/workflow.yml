@@ -26,19 +26,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # workflow_dispatch with build_ref rebuilds an older commit using the
-          # current workflow - used to backfill releases for versions that were
-          # published before releases became one-per-version.
+          # current workflow.
           ref: ${{ inputs.build_ref || github.ref }}
-
-      # Backfilling an old version checks out a commit that predates CHANGELOG.md,
-      # so the notes are read from the default branch instead of the checked-out tree.
-      - name: Fetch CHANGELOG from the default branch
-        if: ${{ inputs.build_ref != '' }}
-        shell: pwsh
-        run: |
-          $url = "https://raw.githubusercontent.com/${{ github.repository }}/main/CHANGELOG.md"
-          Invoke-RestMethod -Uri $url -OutFile CHANGELOG.md
-          Write-Host "fetched CHANGELOG.md ($((Get-Item CHANGELOG.md).Length) bytes)"
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -58,10 +47,12 @@ jobs:
           Write-Host "version=$v tag=v$v sha=$sha"
 
       # One release per version, so a version that has already been published can
-      # never be silently overwritten with different code: rebuilding the same
-      # commit is fine (assets get refreshed), rebuilding different code under an
-      # unchanged version number is an error.
+      # never be silently overwritten with different code:
+      #   - same commit      -> rebuild, refresh the assets only
+      #   - docs / CI only   -> nothing to publish, succeed quietly
+      #   - code changed     -> fail, the version number has to be bumped
       - name: Guard against reusing a published version
+        id: guard
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -73,9 +64,9 @@ jobs:
             Accept                 = "application/vnd.github+json"
             "X-GitHub-Api-Version" = "2022-11-28"
           }
+          $repo = "${{ github.repository }}"
           try {
-            $ref = Invoke-RestMethod -Headers $headers `
-              -Uri "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/$env:TAG"
+            $ref = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/git/ref/tags/$env:TAG"
           } catch {
             if ([int]$_.Exception.Response.StatusCode -eq 404) {
               Write-Host "tag $env:TAG does not exist yet; it will be created at $env:SHA"
@@ -86,13 +77,26 @@ jobs:
 
           $published = $ref.object.sha
           if ($ref.object.type -eq "tag") {
-            $tagObject = Invoke-RestMethod -Headers $headers -Uri $ref.object.url
-            $published = $tagObject.object.sha
+            $published = (Invoke-RestMethod -Headers $headers -Uri $ref.object.url).object.sha
           }
           Write-Host "tag $env:TAG already exists at $published"
-          if ($published -ne $env:SHA) {
-            throw "$env:TAG is already published from $published, but this build is $env:SHA. Bump <Version> in PowerDimmer.csproj; a published version must not be rewritten."
+
+          if ($published -eq $env:SHA) {
+            Write-Host "same commit as the published release; refreshing assets only"
+            exit 0
           }
+
+          $cmp = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$repo/compare/$published...$env:SHA"
+          $codeChanges = @($cmp.files | Where-Object {
+            $_.filename -notmatch '\.md$' -and $_.filename -notmatch '^\.github/workflows/'
+          })
+          if ($codeChanges.Count -gt 0) {
+            $list = ($codeChanges | ForEach-Object { $_.filename }) -join ', '
+            throw "$env:TAG is already published from $published, but this build changes: $list. Bump <Version> in PowerDimmer.csproj."
+          }
+
+          Write-Host "only docs / workflow files changed since $env:TAG; nothing to publish"
+          "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       # Package layout (deliberately mirrors what most portable Windows apps ship):
       #
@@ -106,6 +110,7 @@ jobs:
       # archive: they live inside that same folder, and an "upgrade" would wipe them.
       - name: Build packages
         id: pack
+        if: steps.guard.outputs.skip != 'true'
         shell: pwsh
         env:
           VERSION: ${{ steps.ver.outputs.version }}
@@ -131,7 +136,6 @@ jobs:
             Write-Host "--- $zip ---"
             $names | ForEach-Object { Write-Host "   $_" }
 
-            # Everything must live under the single "PowerDimmer/" folder.
             $outside = $names | Where-Object { -not $_.StartsWith("$folder/") }
             if ($outside) { throw "$zip has entries outside $folder/: $($outside[0])" }
             if ($names -notcontains "$folder/PowerDimmer.exe") { throw "$zip has no $folder/PowerDimmer.exe" }
@@ -140,14 +144,12 @@ jobs:
             if ($userData) { throw "$zip contains user data: $($userData[0])" }
           }
 
-          # --- self-contained (no .NET needed) ---
           dotnet publish -c Release -r win-x64 --self-contained true -o "stage-portable/$folder"
           Assert-NoUserData "stage-portable/$folder"
           $portable = "PowerDimmer_$($env:VERSION)_x64-portable.zip"
           Compress-Archive -Path "stage-portable/$folder" -DestinationPath $portable -Force
           Assert-Archive $portable
 
-          # --- framework dependent (smaller, needs .NET 8 Desktop Runtime) ---
           dotnet publish -c Release -o "stage-light/$folder"
           Assert-NoUserData "stage-light/$folder"
           $light = "PowerDimmer_$($env:VERSION)_x64-requires-dotnet8.zip"
@@ -161,6 +163,7 @@ jobs:
       # copied verbatim so the repo and the Releases page never drift apart.
       - name: Extract release notes from CHANGELOG.md
         id: notes
+        if: steps.guard.outputs.skip != 'true'
         shell: pwsh
         env:
           VERSION: ${{ steps.ver.outputs.version }}
@@ -171,17 +174,17 @@ jobs:
           $text = Get-Content CHANGELOG.md -Raw
           $pattern = "(?ms)^##\s+\[?v?$([regex]::Escape($env:VERSION))\]?[^\r\n]*\r?\n(.*?)(?=^##\s|\z)"
           $m = [regex]::Match($text, $pattern)
-          if ($m.Success) {
-            $notes = $m.Groups[1].Value.Trim()
-          } else {
+          if (-not $m.Success) {
             throw "CHANGELOG.md has no '## [$env:VERSION]' section. Add one before releasing."
           }
+          $notes = $m.Groups[1].Value.Trim()
           "notes<<CHANGELOG_EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           $notes | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "CHANGELOG_EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host $notes
 
       - uses: softprops/action-gh-release@v2
+        if: steps.guard.outputs.skip != 'true'
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.tag }}
@@ -205,3 +208,236 @@ jobs:
             ${{ steps.pack.outputs.light_zip }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # One-off backfill of the versions that were published while there was still a
+  # single rolling "latest" release. Triggered by putting [backfill] in the commit
+  # message, so it does not run on ordinary pushes.
+  #
+  # It lives here rather than in its own workflow because a separate workflow file
+  # got a token with every permission false (even `pull`), so POST /git/refs and
+  # POST /releases both returned 403 - while this file's token can write fine.
+  backfill:
+    if: contains(github.event.head_commit.message, '[backfill]')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - version: "1.1.0"
+            ref: "21e699f3569cdef109bc61e2275ea70dd561c486"
+          - version: "1.2.0"
+            ref: "796af6ae38764eb29673a1668de1f033aae9ea9f"
+          - version: "1.3.0"
+            ref: "ac57a517e25a328a8c96b9eb86baa286a1113845"
+          - version: "1.3.1"
+            ref: "695c6c7dbc58c8f25bb2b4b7ddfb94fa23c0f029"
+          - version: "1.4.0"
+            ref: "4dc2cd38f90b07534b09ff7a1b70f724d5959978"
+          - version: "1.4.1"
+            ref: "42ff0f441a54dbc5de97942d77a2bf5fd1a94de2"
+          - version: "1.4.2"
+            ref: "6cb7c9aa25cdaa8113c15d7423a6e4f8d5c1c4ec"
+          - version: "1.5.0"
+            ref: "fe26c41d0103906cbfc4d2c62d2e5b115eeb6520"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      # The checked-out commit predates CHANGELOG.md, so read it from the branch
+      # that has it. Raw content can be a few seconds behind a fresh push.
+      - name: Fetch CHANGELOG from the default branch
+        shell: pwsh
+        run: |
+          $url = "https://raw.githubusercontent.com/${{ github.repository }}/main/CHANGELOG.md"
+          for ($i = 1; $i -le 5; $i++) {
+            try {
+              Invoke-RestMethod -Uri $url -OutFile CHANGELOG.md
+              if ((Get-Item CHANGELOG.md).Length -gt 1000) { break }
+            } catch {
+              Write-Host "attempt $i failed: $($_.Exception.Message)"
+            }
+            Start-Sleep -Seconds 6
+          }
+          if (-not (Test-Path CHANGELOG.md) -or (Get-Item CHANGELOG.md).Length -lt 1000) {
+            throw "could not fetch CHANGELOG.md from main"
+          }
+          Write-Host "CHANGELOG.md: $((Get-Item CHANGELOG.md).Length) bytes"
+
+      - name: Build packages
+        id: pack
+        shell: pwsh
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $folder = "PowerDimmer"
+
+          function Assert-NoUserData([string]$dir) {
+            foreach ($bad in @("settings.json", "settings.json.new", "crash.log")) {
+              if (Test-Path (Join-Path $dir $bad)) {
+                throw "Refusing to package: $bad found in $dir"
+              }
+            }
+          }
+
+          function Assert-Archive([string]$zip) {
+            $a = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+            $names = $a.Entries | ForEach-Object { $_.FullName }
+            $a.Dispose()
+            $outside = $names | Where-Object { -not $_.StartsWith("$folder/") }
+            if ($outside) { throw "$zip has entries outside $folder/: $($outside[0])" }
+            if ($names -notcontains "$folder/PowerDimmer.exe") { throw "$zip has no $folder/PowerDimmer.exe" }
+            $userData = $names | Where-Object { $_ -match '(^|/)(settings\.json|settings\.json\.new|crash\.log)$' }
+            if ($userData) { throw "$zip contains user data: $($userData[0])" }
+          }
+
+          dotnet publish -c Release -r win-x64 --self-contained true -o "stage-portable/$folder"
+          Assert-NoUserData "stage-portable/$folder"
+          $portable = "PowerDimmer_$($env:VERSION)_x64-portable.zip"
+          Compress-Archive -Path "stage-portable/$folder" -DestinationPath $portable -Force
+          Assert-Archive $portable
+
+          dotnet publish -c Release -o "stage-light/$folder"
+          Assert-NoUserData "stage-light/$folder"
+          $light = "PowerDimmer_$($env:VERSION)_x64-requires-dotnet8.zip"
+          Compress-Archive -Path "stage-light/$folder" -DestinationPath $light -Force
+          Assert-Archive $light
+
+          "portable_zip=$portable" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "light_zip=$light" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Publish release via REST API
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ matrix.version }}
+          REF: ${{ matrix.ref }}
+          PORTABLE: ${{ steps.pack.outputs.portable_zip }}
+          LIGHT: ${{ steps.pack.outputs.light_zip }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $repo = "${{ github.repository }}"
+          $tag = "v$($env:VERSION)"
+          $api = "https://api.github.com/repos/$repo"
+          $headers = @{
+            Authorization          = "Bearer $env:GH_TOKEN"
+            Accept                 = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          function Fail-Call($context, $err) {
+            $code = 0
+            try { $code = [int]$err.Exception.Response.StatusCode } catch { }
+            Write-Host "::error::$context failed (HTTP $code): $($err.ErrorDetails.Message)"
+            throw "$context failed (HTTP $code)"
+          }
+
+          $repoInfo = Invoke-RestMethod -Headers $headers -Uri $api
+          Write-Host "repo permissions: $($repoInfo.permissions | ConvertTo-Json -Compress)"
+
+          $text = Get-Content CHANGELOG.md -Raw
+          $pattern = "(?ms)^##\s+\[?v?$([regex]::Escape($env:VERSION))\]?[^\r\n]*\r?\n(.*?)(?=^##\s|\z)"
+          $m = [regex]::Match($text, $pattern)
+          if (-not $m.Success) { throw "CHANGELOG.md has no '## [$($env:VERSION)]' section" }
+          $notes = (($m.Groups[1].Value.Trim() -replace '(?m)^\s*---\s*$', '') -split "`r?`n" | ForEach-Object { $_.TrimEnd() }) -join "`n"
+          $notes = $notes.Trim()
+
+          $short = $env:REF.Substring(0, 7)
+          $body = @(
+            ('> 本版本为补建发布：当时按滚动方式发布，包已被覆盖；这里从对应提交 `' + $short + '` 重新构建。')
+            ''
+            $notes
+            ''
+            '---'
+            ''
+            ('**' + $env:PORTABLE + '** — 自包含，不需要装 .NET。解压后运行 `PowerDimmer\PowerDimmer.exe`。')
+            ('**' + $env:LIGHT + '** — 体积小，需要 [.NET 8 桌面运行时](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)。')
+          ) -join "`n"
+
+          $tagExists = $false
+          try {
+            $existingTag = Invoke-RestMethod -Headers $headers -Uri "$api/git/ref/tags/$tag"
+            $tagExists = $true
+            Write-Host "tag $tag already exists at $($existingTag.object.sha)"
+          } catch {
+            if ([int]$_.Exception.Response.StatusCode -ne 404) {
+              Write-Host "GET tag $tag -> HTTP $([int]$_.Exception.Response.StatusCode)"
+            }
+          }
+          if (-not $tagExists) {
+            $payload = @{ ref = "refs/tags/$tag"; sha = $env:REF } | ConvertTo-Json
+            try {
+              Invoke-RestMethod -Method Post -Headers $headers -Body $payload `
+                -ContentType "application/json" -Uri "$api/git/refs" | Out-Null
+              $tagExists = $true
+              Write-Host "tag $tag created at $env:REF"
+            } catch {
+              Write-Host "POST git/refs -> HTTP $([int]$_.Exception.Response.StatusCode) body=[$($_.ErrorDetails.Message)]"
+            }
+          }
+
+          $release = $null
+          try {
+            $found = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag"
+            $patch = @{ name = $tag; body = $body } | ConvertTo-Json
+            $release = Invoke-RestMethod -Method Patch -Headers $headers -Body $patch `
+              -ContentType "application/json" -Uri "$api/releases/$($found.id)"
+            Write-Host "release $tag updated (#$($release.id))"
+          } catch {
+            if ([int]$_.Exception.Response.StatusCode -ne 404) { Fail-Call "GET release $tag" $_ }
+            $post = @{
+              tag_name    = $tag
+              name        = $tag
+              body        = $body
+              draft       = $false
+              prerelease  = $false
+              # Never let a backfilled version take the "Latest" badge.
+              make_latest = 'false'
+            }
+            if (-not $tagExists) {
+              Write-Host "tag missing; letting the release create it at $env:REF"
+              $post['target_commitish'] = $env:REF
+            }
+            $postJson = $post | ConvertTo-Json
+            try {
+              $release = Invoke-RestMethod -Method Post -Headers $headers -Body $postJson `
+                -ContentType "application/json" -Uri "$api/releases"
+              Write-Host "release $tag created (#$($release.id))"
+            } catch { Fail-Call "POST release $tag" $_ }
+          }
+
+          $uploadBase = $release.upload_url -replace '\{\?name,label\}', ''
+          $existingAssets = (Invoke-RestMethod -Headers $headers -Uri "$api/releases/$($release.id)/assets").assets
+
+          foreach ($file in @($env:PORTABLE, $env:LIGHT)) {
+            if (-not (Test-Path $file)) { throw "missing package: $file" }
+            $name = Split-Path $file -Leaf
+
+            $dup = $existingAssets | Where-Object { $_.name -eq $name }
+            if ($dup) {
+              Write-Host "replacing existing asset $name"
+              Invoke-RestMethod -Method Delete -Headers $headers -Uri $dup.url | Out-Null
+            }
+
+            $upHeaders = @{
+              Authorization  = "Bearer $env:GH_TOKEN"
+              "Content-Type" = "application/octet-stream"
+            }
+            try {
+              Invoke-RestMethod -Method Post -Headers $upHeaders -InFile $file `
+                -Uri "$uploadBase`?name=$name" | Out-Null
+              Write-Host "uploaded $name ($([math]::Round((Get-Item $file).Length / 1MB, 1)) MB)"
+            } catch { Fail-Call "upload $name" $_ }
+          }
+
+          Write-Host "done: https://github.com/$repo/releases/tag/$tag"
