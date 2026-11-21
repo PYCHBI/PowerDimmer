@@ -43,6 +43,10 @@ namespace PowerDimmer
             ["Menu.Delay500"] = ("0.5 秒", "0.5 s"),
             ["Menu.Delay1000"] = ("1 秒", "1 s"),
 
+            ["Menu.KeepBright"] = ("常亮窗口数量（最近 N 个）", "Bright windows (most recent)"),
+            ["Menu.KeepBrightOne"] = ("1 个  仅当前窗口", "1  current window only"),
+            ["Menu.KeepBrightMany"] = ("{0} 个", "{0} windows"),
+
             ["Menu.FadeOut"] = ("压暗渐变（缓慢变暗）", "Fade out (ease into dim)"),
             ["Menu.FadeOff"] = ("关闭：瞬间变暗", "Off - snap to dark"),
             ["Menu.Fade150"] = ("0.15 秒", "0.15 s"),

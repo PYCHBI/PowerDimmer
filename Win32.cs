@@ -90,9 +90,21 @@ namespace PowerDimmer
         public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
 
         public const uint GW_OWNER = 4;
+        public const uint GW_HWNDNEXT = 2;
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+        /// <summary>
+        /// True for a window DWM is not drawing: on another virtual desktop, or a
+        /// suspended UWP shell surface. IsWindowVisible still says "visible" for those,
+        /// so they have to be filtered out by hand.
+        /// </summary>
+        public static bool IsCloaked(IntPtr hwnd)
+        {
+            return DwmGetWindowAttribute(hwnd, (uint)DWMWINDOWATTRIBUTE.DWMWA_CLOAKED,
+                out int cloaked, sizeof(int)) == 0 && cloaked != 0;
+        }
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -124,6 +136,9 @@ namespace PowerDimmer
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool IsZoomed(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern uint GetDpiForWindow(IntPtr hwnd);
 
         /// <summary>How DWM rounds a window's corners (Windows 11 attribute 33).</summary>
         public enum DWM_WINDOW_CORNER_PREFERENCE
@@ -159,6 +174,26 @@ namespace PowerDimmer
 
         [DllImport("dwmapi.dll", SetLastError = true)]
         internal static extern int DwmGetWindowAttribute(IntPtr hwnd, uint dwAttribute, out int pvAttribute, int cbAttribute);
+
+        // 37 = DWMWA_VISIBLE_FRAME_BORDER_THICKNESS: the stroke Windows 11 draws around a
+        // window. Those pixels are translucent - the window itself does not paint them -
+        // which is why a mask placed underneath shows through at the very edge.
+        private const uint DWMWA_VISIBLE_FRAME_BORDER_THICKNESS = 37;
+
+        /// <summary>
+        /// Thickness, in physical pixels, of that frame stroke. 0 on Windows 10, on square
+        /// windows, and whenever DWM refuses (the caller then keeps the full rectangle).
+        /// </summary>
+        public static int GetVisibleBorderThicknessPx(IntPtr hwnd)
+        {
+            if (DwmGetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS,
+                    out int value, sizeof(int)) != 0)
+            {
+                return 0;
+            }
+
+            return Math.Clamp(value, 0, 8);
+        }
 
         public const int SW_SHOWMAXIMIZED = 3;
         public const int SW_SHOWNORMAL = 1;

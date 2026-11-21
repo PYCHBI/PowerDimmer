@@ -33,6 +33,7 @@ namespace PowerDimmer
         private readonly List<(ToolStripMenuItem Item, int Level)> presetItems = new();
         private readonly List<(ToolStripMenuItem Item, int Ms)> delayItems = new();
         private readonly List<(ToolStripMenuItem Item, int Ms)> fadeItems = new();
+        private readonly List<(ToolStripMenuItem Item, int Count)> keepBrightItems = new();
         private readonly List<(ToolStripMenuItem Item, double Radius)> spotlightRadiusItems = new();
         private ToolStripMenuItem? spotlightItem;
         private readonly List<(ToolStripMenuItem Item, string Color)> colorItems = new();
@@ -132,6 +133,7 @@ namespace PowerDimmer
             presetItems.Clear();
             delayItems.Clear();
             fadeItems.Clear();
+            keepBrightItems.Clear();
             spotlightRadiusItems.Clear();
             spotlightItem = null;
             colorItems.Clear();
@@ -192,6 +194,14 @@ namespace PowerDimmer
                 sub.AddButton(option => option
                     .SetText(CustomCaption(settings.SwitchDelayMs, delayItems.Select(x => x.Ms)))
                     .AddHandler(() => EditDuration(false)));
+            });
+
+            builder.AddSubmenu(Loc.T("Menu.KeepBright"), sub =>
+            {
+                for (var count = Settings.KeepBrightMin; count <= Settings.KeepBrightMax; count++)
+                {
+                    AddKeepBright(sub, count);
+                }
             });
 
             builder.AddSubmenu(Loc.T("Menu.FadeOut"), sub =>
@@ -326,6 +336,28 @@ namespace PowerDimmer
                     }
 
                     settings.SwitchDelayMs = milliseconds;
+                    SyncMenuState();
+                }));
+        }
+
+        private void AddKeepBright(ContextMenuStripBuilder builder, int count)
+        {
+            builder.AddToggle(option => option
+                .SetText(count <= Settings.KeepBrightMin
+                    ? Loc.T("Menu.KeepBrightOne")
+                    : Loc.T("Menu.KeepBrightMany", count))
+                .SetChecked(settings.KeepBrightCount == count)
+                .ConfigureItem(item => keepBrightItems.Add((item, count)))
+                .AddHandler(b =>
+                {
+                    if (!b)
+                    {
+                        return;
+                    }
+
+                    // Radio-like: clicking the one that is already ticked must not
+                    // untick it, otherwise the bright area would have no described state.
+                    settings.KeepBrightCount = count;
                     SyncMenuState();
                 }));
         }
@@ -557,6 +589,11 @@ namespace PowerDimmer
             foreach (var (item, ms) in fadeItems)
             {
                 item.Checked = settings.FadeOutMs == ms;
+            }
+
+            foreach (var (item, count) in keepBrightItems)
+            {
+                item.Checked = settings.KeepBrightCount == count;
             }
 
             if (spotlightItem != null)

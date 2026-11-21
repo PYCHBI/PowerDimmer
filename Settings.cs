@@ -45,6 +45,11 @@ namespace PowerDimmer
         public const int FadeOutMinMs = 0;
         public const int FadeOutMaxMs = 5000;
 
+        // How many of the most recently used windows stay un-dimmed. 1 is the classic
+        // behaviour (only the window in front); the tray menu offers 1..8.
+        public const int KeepBrightMin = 1;
+        public const int KeepBrightMax = 8;
+
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
             WriteIndented = true,
@@ -91,6 +96,9 @@ namespace PowerDimmer
         // the area under it stays readable. Radius is in DIPs (scales with the monitor).
         private bool spotlightEnabled = false;
         private double spotlightRadius = 140;
+
+        // Number of most recently used windows that stay readable at once.
+        private int keepBrightCount = 1;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -212,6 +220,16 @@ namespace PowerDimmer
         }
 
         /// <summary>
+        /// How many of the most recently used windows stay un-dimmed. 1 = only the
+        /// focused window, which is what the mask used to do.
+        /// </summary>
+        public int KeepBrightCount
+        {
+            get => keepBrightCount;
+            set => Set(ref keepBrightCount, Math.Clamp(value, KeepBrightMin, KeepBrightMax));
+        }
+
+        /// <summary>
         /// Case-insensitive substrings matched against process name, exe path and
         /// window title. Assigning a new list triggers a change notification, which is
         /// what makes the mask re-evaluate immediately.
@@ -292,6 +310,11 @@ namespace PowerDimmer
             if (dto.spotlightRadius != null)
             {
                 SpotlightRadius = dto.spotlightRadius.Value;
+            }
+
+            if (dto.keepBrightCount != null)
+            {
+                KeepBrightCount = dto.keepBrightCount.Value;
             }
 
             var level = dto.dimLevel ?? (dto.brightness != null ? 100 - dto.brightness.Value : (int?)null);
@@ -503,6 +526,7 @@ namespace PowerDimmer
             fadeOutMs = Math.Clamp(dto.fadeOutMs ?? fadeOutMs, FadeOutMinMs, FadeOutMaxMs);
             spotlightEnabled = dto.spotlightEnabled ?? spotlightEnabled;
             spotlightRadius = Math.Clamp(dto.spotlightRadius ?? spotlightRadius, 20, 1200);
+            keepBrightCount = Math.Clamp(dto.keepBrightCount ?? keepBrightCount, KeepBrightMin, KeepBrightMax);
         }
 
         private SettingsDto ToDto() => new()
@@ -521,7 +545,8 @@ namespace PowerDimmer
             switchDelayMs = switchDelayMs,
             fadeOutMs = fadeOutMs,
             spotlightEnabled = spotlightEnabled,
-            spotlightRadius = spotlightRadius
+            spotlightRadius = spotlightRadius,
+            keepBrightCount = keepBrightCount
         };
 
         // Same key names the Config.Net version produced, so an existing settings.json
@@ -544,6 +569,7 @@ namespace PowerDimmer
             public int? fadeOutMs { get; set; }
             public bool? spotlightEnabled { get; set; }
             public double? spotlightRadius { get; set; }
+            public int? keepBrightCount { get; set; }
         }
     }
 }

@@ -39,6 +39,10 @@ namespace PowerDimmer
         private Brush maskBrush = Brushes.Black;
         private static Mutex? singleInstanceMutex;
 
+        // Our own masks and shade windows live in the same z-order as everything else,
+        // so they have to be recognised by process id before they can be counted.
+        private static readonly uint ownProcessId = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+
         // 0 = no mask at all, 100 = solid black. The old code stored the inverse
         // ("brightness") which made the slider behave backwards for a mask tool.
         private static double DimToOpacity(int dimLevel) => Math.Clamp(dimLevel, 0, 100) / 100.0;
@@ -125,7 +129,30 @@ namespace PowerDimmer
                         UpdateSpotlight();
                     }
                 }
+                else if (e.PropertyName == nameof(settings.KeepBrightCount))
+                {
+                    // Reshapes the bright area immediately: this is a layout change, not a
+                    // focus change, so the switch delay does not apply to it.
+                    RebuildMaskNow();
+                }
             };
+        }
+
+        /// <summary>
+        /// Re-lays the mask for the current focus without the switch delay or a fade. Used
+        /// when a setting changes the shape of the bright area rather than the focus.
+        /// </summary>
+        private void RebuildMaskNow()
+        {
+            if (!settings.DimmingEnabled || masksHidden || dimWindows.Count == 0 ||
+                !Win32.IsWindow(curFgHwnd))
+            {
+                return;
+            }
+
+            CancelMaskMove();
+            CancelFade();
+            PlaceMasksBelow(ResolveMaskAnchor(curFgHwnd));
         }
 
         private static void LogCrash(Exception? exception)
@@ -205,7 +232,8 @@ namespace PowerDimmer
 
             // Debug helper used while developing the tray menu (layout / localisation):
             // PowerDimmer.exe --menu-preview  opens the menu once at a fixed spot.
-            if (e.Args.Any(a => a.Equals("--menu-preview", StringComparison.OrdinalIgnoreCase)))
+            if (e.Args.Any(a => a.Equals("--menu-preview", StringComparison.OrdinalIgnoreCase)) ||
+                e.Args.Any(a => a.Equals("--menu-preview-keepbright", StringComparison.OrdinalIgnoreCase)))
             {
                 var timer = new System.Windows.Threading.DispatcherTimer
                 {
@@ -216,7 +244,20 @@ namespace PowerDimmer
                     timer.Stop();
                     var strip = iconController.NotifyIcon.ContextMenuStrip;
                     var area = System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea;
-                    strip?.Show(new System.Drawing.Point(area.Left + 60, area.Top + 60));
+                    var spot = new System.Drawing.Point(area.Left + 60, area.Top + 60);
+
+                    // --menu-preview-keepbright  shows the "bright windows" submenu
+                    // on its own (the parent strip blocks the thread in its menu
+                    // loop, so nothing can be driven from inside after Show()).
+                    if (e.Args.Any(a => a.Equals("--menu-preview-keepbright", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var keep = strip?.Items.OfType<System.Windows.Forms.ToolStripMenuItem>()
+                            .FirstOrDefault(i => i.Text == Loc.T("Menu.KeepBright"));
+                        keep?.DropDown.Show(spot);
+                        return;
+                    }
+
+                    strip?.Show(spot);
                 };
                 timer.Start();
             }
@@ -593,24 +634,21 @@ namespace PowerDimmer
             // Set the incoming/foreground handle as TOP...
             Win32.SetWindowPos(fgHwnd, Win32.HWND_TOP, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
 
-            IntPtr? firstPinned = null;
             foreach (var pinHandle in pinnedHandles)
             {
                 if (pinHandle == fgHwnd) continue; // if pinned but also foreground skip
                 // Place each pinned window under the foreground
                 Win32.SetWindowPos(pinHandle, fgHwnd, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
-                // store the first pinned handle we didn't skip over
-                firstPinned ??= pinHandle;
             }
 
-            var anchor = firstPinned ?? fgHwnd;
+            var anchor = ResolveMaskAnchor(fgHwnd);
             var previous = lastDimTarget;
             var delay = Math.Clamp(settings.SwitchDelayMs, Settings.SwitchDelayMinMs, Settings.SwitchDelayMaxMs);
 
             // Switch delay: right after the focus moves, park the mask under the window we
             // just left instead of the new one. Everything above the mask stays readable,
             // so both windows stay bright for a moment and then only the new one is left.
-            if (delay > 0 && firstPinned == null && previous != IntPtr.Zero && previous != fgHwnd
+            if (delay > 0 && pinnedHandles.Count == 0 && previous != IntPtr.Zero && previous != fgHwnd
                 && Win32.IsWindow(previous) && !Win32.IsIconic(previous))
             {
                 // Do *not* re-stack here. The mask is already sitting under the window we
@@ -638,6 +676,82 @@ namespace PowerDimmer
                     Win32.SetWindowPos(taskbarHwnd, Win32.HWND_BOTTOM, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
                 }
             }
+        }
+
+        /// <summary>
+        /// Window the mask has to sit under, so that exactly the windows the user wants
+        /// to keep readable end up above it.
+        ///
+        /// The mask is a single flat layer: everything above it stays bright. Windows keeps
+        /// recently used windows at the top of the z-order, so "the N most recent" is the
+        /// top N of that order, and the anchor is simply the Nth of them. Pinned windows
+        /// are always part of the set - pinning one means "never dim this", so the anchor
+        /// has to stay below every pin regardless of the count.
+        /// </summary>
+        private IntPtr ResolveMaskAnchor(IntPtr fgHwnd)
+        {
+            var keep = Math.Clamp(settings.KeepBrightCount, Settings.KeepBrightMin, Settings.KeepBrightMax);
+            if (fgHwnd == IntPtr.Zero)
+            {
+                return fgHwnd;
+            }
+
+            var anchor = fgHwnd;
+            var counted = 1;
+            var pinsSeen = pinnedHandles.Contains(fgHwnd) ? 1 : 0;
+
+            // Bounded walk: a z-order that keeps handing out windows we cannot count (all
+            // pinned but missing, for instance) must not turn into an endless loop.
+            var probe = Win32.GetWindow(fgHwnd, Win32.GW_HWNDNEXT);
+            for (var guard = 0; probe != IntPtr.Zero && guard < 64; guard++)
+            {
+                // Checked before scanning: with the default count of one there is nothing
+                // to look for, and this must not swallow the next window down.
+                if (counted >= keep && pinsSeen >= pinnedHandles.Count)
+                {
+                    break;
+                }
+
+                var pinned = pinnedHandles.Contains(probe);
+                if (pinned || IsBrightCandidate(probe))
+                {
+                    anchor = probe;
+                    if (pinned)
+                    {
+                        pinsSeen++;
+                    }
+                    else
+                    {
+                        counted++;
+                    }
+
+                    if (counted >= keep && pinsSeen >= pinnedHandles.Count)
+                    {
+                        break;
+                    }
+                }
+
+                probe = Win32.GetWindow(probe, Win32.GW_HWNDNEXT);
+            }
+
+            return anchor;
+        }
+
+        /// <summary>
+        /// Whether a window may occupy one of the "keep bright" slots. Deliberately the
+        /// same test the focus hook uses, so the set of windows that can be counted matches
+        /// the set of windows that can take focus - tool windows, the taskbar, the desktop
+        /// and our own masks are all excluded.
+        /// </summary>
+        private static bool IsBrightCandidate(IntPtr hwnd)
+        {
+            if (!Win32.IsStandardWindow(hwnd) || Win32.IsIconic(hwnd) || Win32.IsCloaked(hwnd))
+            {
+                return false;
+            }
+
+            // Masks and shade windows live in this process and in the same z-order.
+            return Win32.GetProcessId(hwnd) != ownProcessId && Win32.HasNoVisibleOwner(hwnd);
         }
 
         /// <summary>Stacks every mask directly below <paramref name="anchor"/>.</summary>
@@ -689,9 +803,35 @@ namespace PowerDimmer
             // actually bright right now.
             CancelFade();
 
+            // Windows 11 draws a translucent 1-DIP frame border around every window, and
+            // those pixels are not painted by the window itself: the mask underneath shows
+            // through them. An overlay laid on the window would dim that stroke a second
+            // time, so while the fade runs the window's outline turns into a hairline that
+            // is darker than the row right outside it - and snaps back when the mask takes
+            // over. Inset the overlay by exactly the border thickness, so its edge lands
+            // where the painted pixels start and no pixel is covered twice.
+            var radiusDip = GetWindowCornerRadiusDip(leaving);
+            var inset = Win32.GetVisibleBorderThicknessPx(leaving);
+            if (inset > 0 && bounds.Width > inset * 4 && bounds.Height > inset * 4)
+            {
+                bounds = new System.Drawing.Rectangle(bounds.Left + inset, bounds.Top + inset,
+                    bounds.Width - inset * 2, bounds.Height - inset * 2);
+
+                // The corner arc lives on the inset rectangle now, so its radius shrinks
+                // with it; otherwise the clip would cut into the window at each corner.
+                var dpi = Win32.GetDpiForWindow(leaving);
+                if (dpi == 0)
+                {
+                    dpi = 96;
+                }
+
+                var radiusPx = Math.Max(0, (int)Math.Round(radiusDip * dpi / 96.0) - inset);
+                radiusDip = radiusPx * 96.0 / dpi;
+            }
+
             var overlay = new DimWindow(settings, bounds, maskBrush)
             {
-                CornerRadiusDip = GetWindowCornerRadiusDip(leaving)
+                CornerRadiusDip = radiusDip
             };
             overlay.SetSurfaceOpacity(0);
             overlay.Show();
@@ -938,7 +1078,11 @@ namespace PowerDimmer
                     }
 
                     // The window we were heading to may have been closed in the meantime.
-                    var anchor = Win32.IsWindow(pendingMaskAnchor) ? pendingMaskAnchor : curFgHwnd;
+                    // With more than one bright window the stack may also have shifted,
+                    // so the anchor is re-resolved instead of reused.
+                    var anchor = settings.KeepBrightCount > Settings.KeepBrightMin
+                        ? ResolveMaskAnchor(curFgHwnd)
+                        : (Win32.IsWindow(pendingMaskAnchor) ? pendingMaskAnchor : curFgHwnd);
                     MoveMasksBelow(anchor);
                     Trace($"tick: mask -> {Describe(anchor)}");
                 };
@@ -1071,6 +1215,9 @@ namespace PowerDimmer
 
         /// <summary>Grace period after a focus change, in milliseconds (0 = off).</summary>
         int SwitchDelayMs { get; set; }
+
+        /// <summary>How many of the most recently used windows stay readable (1..8).</summary>
+        int KeepBrightCount { get; set; }
 
         /// <summary>How long the window we left takes to darken, in milliseconds (0 = snap).</summary>
         int FadeOutMs { get; set; }
